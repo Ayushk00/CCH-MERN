@@ -37,15 +37,3 @@ Campus CareerHub is a web platform architected using the **MERN stack (MongoDB, 
    http://localhost:3000
    ```
 
-## Contributing
-
-Contributions are welcome! Please fork the repository and submit a pull request.
-
-## License
-
-This project is licensed under the MIT License.
-
----
-
-Would you like me to add more detailed sections or refine anything further? Let me know! 🚀
-
