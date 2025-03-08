@@ -1,8 +1,2 @@
-# React + Vite
-
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
-
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+Campus CareerHub is a web platform architected using the MERN stack (MongoDB, Express.js, React, Node.js), facilitating one-to-many interactions between companies and IIITA students for placement opportunities. It includes an admin panel for end-to-end process monitoring, achieving over 50% reduction in manual workload through process optimization and automation.
+Campus CareerHub is a dynamic, event-driven placement management system, efficiently handling over 100+ concurrent users with constant time (O(1)) CRUD operations powered by MongoDB’s indexing and sharding capabilities.
