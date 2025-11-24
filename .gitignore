@@ -1,24 +1,36 @@
+# Node.js & npm / yarn dependencies
+/node_modules/
+client/client/node_modules
+server/server/node_modules/
+
 # Logs
-logs
+npm-debug.log
+yarn-error.log
+logs/
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
+# Environment files (sensitive data)
+.env
 
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+# Build output
+client/client/build/
+server/server/build/
+
+# OS-specific files
+.DS_Store  # macOS
+Thumbs.db  # Windows
+
+# IDE/Editor files
+.vscode/
+.idea/
+
+# Optional: Ignore testing output
+test-report/
+
+# Package lock files
+package-lock.json
+yarn.lock
+
+# Other
+*.tgz
+*.swp
