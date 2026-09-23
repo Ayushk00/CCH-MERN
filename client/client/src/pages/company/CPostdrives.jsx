@@ -1,147 +1,115 @@
 import React, { useState } from "react";
-// Removed CBanner as the code was not provided
-import axios from "axios";
+import { useNavigate } from "react-router-dom";
+import { Send } from "lucide-react";
+import api, { errorMessage } from "../../utility/api";
+import { useToast } from "../../components/common/Toast";
+import { Alert, Field, PageHeader, SectionCard, Spinner } from "../../components/ui";
 
-// A simple toast notification component
-const Toast = ({ message, type, onclose }) => {
-    if (!message) return null;
-    const baseStyle = "fixed top-5 right-5 p-4 rounded-lg shadow-lg text-white transition-opacity duration-300 z-50";
-    const typeStyle = type === 'success' ? 'bg-green-500' : 'bg-red-500';
-
-    return (
-        <div className={`${baseStyle} ${typeStyle}`}>
-            <span>{message}</span>
-            <button onClick={onclose} className="ml-4 font-bold">X</button>
-        </div>
-    );
+const EMPTY = {
+    role: '', type: 'full-time', ctc: '', lastDate: '', location: '',
+    eligibleBranches: '', eligibleBatch: '', minimumCgpa: '',
 };
+const BRANCH_SUGGESTIONS = ['all', 'it', 'ece', 'it-bi', 'cse'];
 
+const today = () => new Date().toISOString().slice(0, 10);
 
 export default function CPostdrives() {
-    // Use an object for form state for cleaner management
-    const [formData, setFormData] = useState({
-        type: 'full-time',
-        ctc: '',
-        eligibleBranches: '',
-        lastDate: '',
-        role: '',
-        location: '',
-        eligibleBatch: '',
-        minimumCgpa: ''
-    });
-    const [toast, setToast] = useState({ message: '', type: '' });
+    const [form, setForm] = useState(EMPTY);
+    const [error, setError] = useState('');
+    const [isSaving, setIsSaving] = useState(false);
+    const { showToast, toastElement } = useToast();
+    const navigate = useNavigate();
 
-    const showToast = (message, type) => {
-        setToast({ message, type });
-        setTimeout(() => setToast({ message: '', type: '' }), 5000);
+    const update = (key) => (e) => setForm({ ...form, [key]: e.target.value });
+
+    const toggleBranch = (branch) => {
+        const current = form.eligibleBranches.split(',').map((b) => b.trim().toLowerCase()).filter(Boolean);
+        const next = current.includes(branch) ? current.filter((b) => b !== branch) : [...current, branch];
+        setForm({ ...form, eligibleBranches: next.join(', ') });
     };
+    const selectedBranches = form.eligibleBranches.split(',').map((b) => b.trim().toLowerCase()).filter(Boolean);
 
-    // Single handler for all input changes
-    const handleChange = (e) => {
-        const { id, value } = e.target;
-        setFormData(prev => ({ ...prev, [id]: value }));
-    };
-
-    const handlePostDrive = (e) => {
+    const handleSubmit = async (e) => {
         e.preventDefault();
-
-        // Basic validation
-        for (const key in formData) {
-            if (!formData[key]) {
-                showToast(`Please fill out the ${key} field.`, 'error');
-                return;
-            }
+        setError('');
+        const missing = Object.entries(form).find(([, v]) => !String(v).trim());
+        if (missing) {
+            setError('Please fill in every field.');
+            return;
         }
-
-        axios.post('http://localhost:3000/api/company/jobs', formData, {
-            withCredentials: true
-        })
-        .then(res => {
-            showToast(res.data.message || "Drive posted successfully!", 'success');
-            // Optionally clear the form
-            setFormData({
-                type: 'full-time', ctc: '', eligibleBranches: '', lastDate: '',
-                role: '', location: '', eligibleBatch: '', minimumCgpa: ''
-            });
-        })
-        .catch(err => {
-            showToast(err.response?.data?.message || "An error occurred.", 'error');
-            console.error("Error is: ", err);
-        });
+        const cgpa = Number(form.minimumCgpa);
+        if (!(cgpa >= 0 && cgpa <= 10)) {
+            setError('Minimum CGPA must be between 0 and 10.');
+            return;
+        }
+        setIsSaving(true);
+        try {
+            const res = await api.post('/company/jobs', form);
+            showToast(res.data?.message || 'Drive posted', 'success');
+            setForm(EMPTY);
+            setTimeout(() => navigate('/company/current-drives'), 800);
+        } catch (err) {
+            setError(errorMessage(err, 'Could not post the drive'));
+        } finally {
+            setIsSaving(false);
+        }
     };
 
     return (
         <>
-            <Toast message={toast.message} type={toast.type} onclose={() => setToast({ message: '', type: '' })} />
-            <div className="flex justify-center bg-gray-50 py-10">
-                <div className="w-full max-w-4xl bg-white p-8 rounded-lg shadow-md">
-                    <h1 className="text-3xl font-bold text-gray-800">Post a New Drive</h1>
-                    <p className="mt-2 text-gray-600">Fill in the details below to create a new job opening.</p>
-                    
-                    {/* Form starts here */}
-                    <form onSubmit={handlePostDrive} className="mt-8 space-y-6">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            {/* Role */}
-                            <div>
-                                <label htmlFor="role" className="text-sm font-medium text-gray-700">Role</label>
-                                <input id="role" type="text" placeholder="e.g., Software Engineer" value={formData.role} onChange={handleChange} className="mt-1 flex h-10 w-full rounded-md border border-gray-300 bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"/>
-                            </div>
-
-                            {/* Job Type */}
-                            <div>
-                                <label htmlFor="type" className="text-sm font-medium text-gray-700">Job Type</label>
-                                <select id="type" value={formData.type} onChange={handleChange} className="mt-1 flex h-10 w-full rounded-md border border-gray-300 bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+            {toastElement}
+            <PageHeader title="Post a new drive" description="Students who match the eligibility rules will be able to apply." />
+            <div className="grid gap-6 lg:grid-cols-3">
+                <form onSubmit={handleSubmit} className="space-y-6 lg:col-span-2" noValidate>
+                    <SectionCard title="Role">
+                        <div className="grid gap-4 sm:grid-cols-2">
+                            <Field label="Job title" htmlFor="role" className="sm:col-span-2"><input id="role" className="input" value={form.role} onChange={update('role')} placeholder="e.g. Software Engineer" required /></Field>
+                            <Field label="Job type" htmlFor="type">
+                                <select id="type" className="input" value={form.type} onChange={update('type')}>
                                     <option value="full-time">Full-time</option>
                                     <option value="internship">Internship</option>
                                     <option value="part-time">Part-time</option>
                                 </select>
-                            </div>
-
-                            {/* CTC/Stipend */}
-                            <div>
-                                <label htmlFor="ctc" className="text-sm font-medium text-gray-700">CTC / Stipend (in INR)</label>
-                                <input id="ctc" type="number" placeholder="e.g., 1200000" value={formData.ctc} onChange={handleChange} className="mt-1 flex h-10 w-full rounded-md border border-gray-300 bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"/>
-                            </div>
-                            
-                            {/* Deadline */}
-                            <div>
-                                <label htmlFor="lastDate" className="text-sm font-medium text-gray-700">Application Deadline</label>
-                                <input id="lastDate" type="date" value={formData.lastDate} onChange={handleChange} className="mt-1 flex h-10 w-full rounded-md border border-gray-300 bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"/>
-                            </div>
-
-                            {/* Eligible Branches */}
-                            <div className="md:col-span-2">
-                                <label htmlFor="eligibleBranches" className="text-sm font-medium text-gray-700">Eligible Branches (comma-separated)</label>
-                                <input id="eligibleBranches" type="text" placeholder="e.g., cse, it, ece" value={formData.eligibleBranches} onChange={handleChange} className="mt-1 flex h-10 w-full rounded-md border border-gray-300 bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"/>
-                            </div>
-
-                             {/* Location */}
-                             <div>
-                                <label htmlFor="location" className="text-sm font-medium text-gray-700">Location</label>
-                                <input id="location" type="text" placeholder="e.g., Bengaluru, Remote" value={formData.location} onChange={handleChange} className="mt-1 flex h-10 w-full rounded-md border border-gray-300 bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"/>
-                            </div>
-
-                            {/* Eligible Batch */}
-                            <div>
-                                <label htmlFor="eligibleBatch" className="text-sm font-medium text-gray-700">Eligible Batch (Year)</label>
-                                <input id="eligibleBatch" type="number" placeholder="e.g., 2025" value={formData.eligibleBatch} onChange={handleChange} className="mt-1 flex h-10 w-full rounded-md border border-gray-300 bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"/>
-                            </div>
-                           
-                            {/* Minimum CGPA */}
-                             <div className="md:col-span-2">
-                                <label htmlFor="minimumCgpa" className="text-sm font-medium text-gray-700">Minimum CGPA Required</label>
-                                <input id="minimumCgpa" type="text" placeholder="e.g., 7.5" value={formData.minimumCgpa} onChange={handleChange} className="mt-1 flex h-10 w-full rounded-md border border-gray-300 bg-transparent px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"/>
-                            </div>
+                            </Field>
+                            <Field label="Location" htmlFor="location"><input id="location" className="input" value={form.location} onChange={update('location')} placeholder="e.g. Bengaluru or Remote" required /></Field>
+                            <Field label="CTC / stipend (INR)" htmlFor="ctc" hint="Annual CTC, or monthly stipend for internships"><input id="ctc" type="number" min="0" className="input" value={form.ctc} onChange={update('ctc')} placeholder="1200000" required /></Field>
+                            <Field label="Application deadline" htmlFor="lastDate"><input id="lastDate" type="date" min={today()} className="input" value={form.lastDate} onChange={update('lastDate')} required /></Field>
                         </div>
-
-                        {/* Submit Button */}
-                        <div className="pt-4">
-                             <button type="submit" className="w-full py-3 px-4 inline-flex items-center justify-center gap-x-2 text-sm font-semibold rounded-lg border border-transparent bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:pointer-events-none">
-                                Create Drive
-                            </button>
+                    </SectionCard>
+                    <SectionCard title="Eligibility">
+                        <div className="grid gap-4 sm:grid-cols-2">
+                            <Field label="Eligible branches" htmlFor="eligibleBranches" hint="Comma-separated, or pick below. Use “all” for every branch." className="sm:col-span-2">
+                                <input id="eligibleBranches" className="input" value={form.eligibleBranches} onChange={update('eligibleBranches')} placeholder="it, ece" required />
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                    {BRANCH_SUGGESTIONS.map((b) => (
+                                        <button type="button" key={b} onClick={() => toggleBranch(b)} className={`chip uppercase ${selectedBranches.includes(b) ? 'chip-active' : ''}`} aria-pressed={selectedBranches.includes(b)}>{b}</button>
+                                    ))}
+                                </div>
+                            </Field>
+                            <Field label="Eligible batch (graduating year)" htmlFor="eligibleBatch"><input id="eligibleBatch" type="number" className="input" value={form.eligibleBatch} onChange={update('eligibleBatch')} placeholder="2027" required /></Field>
+                            <Field label="Minimum CGPA" htmlFor="minimumCgpa"><input id="minimumCgpa" type="number" step="0.1" min="0" max="10" className="input" value={form.minimumCgpa} onChange={update('minimumCgpa')} placeholder="7.5" required /></Field>
                         </div>
-                    </form>
-                </div>
+                    </SectionCard>
+                    {error && <Alert tone="error">{error}</Alert>}
+                    <div className="flex justify-end gap-2">
+                        <button type="button" onClick={() => setForm(EMPTY)} className="btn btn-secondary">Reset</button>
+                        <button type="submit" disabled={isSaving} className="btn btn-primary">
+                            {isSaving ? <Spinner className="h-4 w-4" /> : <Send className="h-4 w-4" aria-hidden="true" />}
+                            {isSaving ? 'Posting...' : 'Publish drive'}
+                        </button>
+                    </div>
+                </form>
+                <aside className="lg:col-span-1">
+                    <div className="card card-body sticky top-6 bg-gradient-to-br from-brand-50 to-white">
+                        <h2 className="font-semibold text-slate-900">Tips</h2>
+                        <ul className="mt-3 space-y-2 text-sm text-slate-600">
+                            <li>• Only students whose branch, batch and CGPA match can apply.</li>
+                            <li>• The drive closes automatically after the deadline.</li>
+                            <li>• Applicants&apos; resumes appear under <strong>Applications</strong>.</li>
+                            <li>• The placement cell can see and moderate all postings.</li>
+                        </ul>
+                    </div>
+                </aside>
             </div>
         </>
     );

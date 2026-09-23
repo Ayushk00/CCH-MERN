@@ -1,195 +1,188 @@
-import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import React, { useEffect, useRef, useState } from 'react';
+import { FileText, UploadCloud, Save } from 'lucide-react';
+import api, { errorMessage, resumeUrl, formatDate } from '../../utility/api';
+import { Alert, Field, PageHeader, PageLoader, SectionCard, Spinner } from '../../components/ui';
 
-// --- Reusable Form Components ---
+const EMPTY = {
+    name: '', email: '', phone: '', gender: '', degree: '', branch: '', rollNo: '',
+    cgpi: '', tenthMarks: '', twelfthMarks: '', graduatingYear: '',
+};
 
-/**
- * A reusable input field component.
- * Reduces boilerplate for common text, email, and number inputs.
- */
-const InputField = ({ label, name, value, onChange, type = 'text', required = false, placeholder = '' }) => (
-    <div className="mb-6">
-        <label htmlFor={name} className="block text-gray-700 mb-2">{label}</label>
-        <input
-            type={type}
-            id={name}
-            name={name}
-            value={value}
-            onChange={onChange}
-            className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-            required={required}
-            placeholder={placeholder}
-            min={type === 'number' && name === 'graduatingYear' ? new Date().getFullYear() : undefined}
-            max={type === 'number' && name === 'graduatingYear' ? new Date().getFullYear() + 10 : undefined}
-        />
-    </div>
-);
+// Upload / replace the PDF resume that recruiters see with each application
+const ResumeSection = ({ studentId, resume, onUploaded }) => {
+    const [file, setFile] = useState(null);
+    const [isUploading, setIsUploading] = useState(false);
+    const [status, setStatus] = useState({ tone: '', text: '' });
+    const inputRef = useRef(null);
 
-/**
- * A reusable select (dropdown) component.
- * Simplifies the creation of dropdown menus from an options array.
- */
-const SelectField = ({ label, name, value, onChange, options }) => (
-    <div className="mb-6">
-        <label htmlFor={name} className="block text-gray-700 mb-2">{label}</label>
-        <select
-            id={name}
-            name={name}
-            value={value}
-            onChange={onChange}
-            className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-        >
-            {options.map(option => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-            ))}
-        </select>
-    </div>
-);
-
-// --- Main EditProfile Component ---
-
-const EditProfile = () => {
-    // Centralized state for all student data
-    const [student, setStudent] = useState({
-        name: '', email: '', phone: '', gender: '', degree: '',
-        branch: '', rollNo: '', cgpi: '', tenthMarks: '',
-        twelfthMarks: '', graduatingYear: '',
-    });
-
-    const [isLoading, setIsLoading] = useState(false);
-    const [isFetching, setIsFetching] = useState(true); // For initial data load
-
-    // Fetch student data from the backend when the component mounts
-    useEffect(() => {
-        const fetchStudentData = async () => {
-            setIsFetching(true);
-            try {
-                const response = await axios.get('http://localhost:3000/api/student/profile', {
-                    withCredentials: true // This is crucial for sending the auth cookie
-                });
-
-                // THIS IS THE FIX:
-                // We will robustly check for the student data in the response.
-                // Case 1: The data is nested inside a `data` property (e.g., { data: { student... } })
-                // Case 2: The entire response body is the student data itself.
-                let profileData = response.data?.data;
-                if (!profileData || typeof profileData.name === 'undefined') {
-                    if (response.data && typeof response.data.name !== 'undefined') {
-                        profileData = response.data;
-                    }
-                }
-
-                if (profileData) {
-                    const sanitizedData = {
-                        name: profileData.name || '',
-                        email: profileData.email || '',
-                        phone: profileData.phone || '',
-                        gender: profileData.gender || '',
-                        degree: profileData.degree || '',
-                        branch: profileData.branch || '',
-                        rollNo: profileData.rollNo || '',
-                        cgpi: profileData.cgpi || '',
-                        tenthMarks: profileData.tenthMarks || '',
-                        twelfthMarks: profileData.twelfthMarks || '',
-                        graduatingYear: profileData.graduatingYear || '',
-                    };
-                    setStudent(sanitizedData);
-                } else {
-                    throw new Error("Profile data not found in the API response.");
-                }
-            } catch (error) {
-                console.error('Error fetching student data:', error);
-                alert('Failed to load your profile data. Please try refreshing the page.');
-            } finally {
-                setIsFetching(false);
-            }
-        };
-        fetchStudentData();
-    }, []); // The empty array ensures this runs only once on component mount
-
-    // Generic handler for form input changes
-    const handleChange = (e) => {
-        const { name, value } = e.target;
-        setStudent(prevStudent => ({ ...prevStudent, [name]: value }));
-    };
-
-    // Handler for form submission
-    const handleSubmit = async (e) => {
+    const handleUpload = async (e) => {
         e.preventDefault();
-        setIsLoading(true);
+        if (!file) return;
+        if (file.type !== 'application/pdf') {
+            setStatus({ tone: 'error', text: 'Please choose a PDF file.' });
+            return;
+        }
+        if (file.size > 5 * 1024 * 1024) {
+            setStatus({ tone: 'error', text: 'The file is larger than 5 MB.' });
+            return;
+        }
+        const formData = new FormData();
+        formData.append('resume', file);
+        setIsUploading(true);
         try {
-            await axios.put('http://localhost:3000/api/student/complete-profile', student, {
-                withCredentials: true // Crucial for authenticating the request
-            });
-            alert('Profile updated successfully!');
-        } catch (error) {
-            console.error('Error updating profile:', error);
-            const errorMessage = error.response?.data?.message || 'Failed to update profile. Please try again.';
-            alert(`Error: ${errorMessage}`);
+            const res = await api.post('/student/resume', formData);
+            setStatus({ tone: 'success', text: res.data?.message || 'Resume uploaded' });
+            setFile(null);
+            if (inputRef.current) inputRef.current.value = '';
+            onUploaded(res.data?.data);
+        } catch (err) {
+            setStatus({ tone: 'error', text: errorMessage(err, 'Upload failed') });
         } finally {
-            setIsLoading(false);
+            setIsUploading(false);
         }
     };
 
-    // --- Form Configuration ---
-    const genderOptions = [
-        { value: "", label: "Select Gender" }, { value: "male", label: "Male" },
-        { value: "female", label: "Female" }, { value: "other", label: "Other" },
-    ];
-    const degreeOptions = [
-        { value: "", label: "Select Degree" }, { value: "btech", label: "B.Tech" },
-        { value: "mtech", label: "M.Tech" }, { value: "mba", label: "MBA" },
-    ];
+    return (
+        <SectionCard title="Resume" description="PDF, up to 5 MB. Recruiters see the resume you had when you applied.">
+            {resume?.fileName ? (
+                <div className="mb-4 flex items-center gap-3 rounded-xl border border-slate-200 p-3">
+                    <span className="grid h-10 w-10 place-items-center rounded-lg bg-rose-50 text-rose-600"><FileText className="h-5 w-5" aria-hidden="true" /></span>
+                    <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-slate-900">{resume.originalName || 'resume.pdf'}</p>
+                        <p className="text-xs text-slate-500">Uploaded {formatDate(resume.uploadedAt)}</p>
+                    </div>
+                    <a href={resumeUrl.student(studentId)} target="_blank" rel="noopener noreferrer" className="btn btn-secondary btn-sm">View</a>
+                </div>
+            ) : (
+                <Alert tone="warning" className="mb-4">No resume uploaded yet. You need one to apply.</Alert>
+            )}
+            <form onSubmit={handleUpload}>
+                <label htmlFor="resume-file" className="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-300 px-4 py-6 text-center transition hover:border-brand-400 hover:bg-brand-50/40">
+                    <UploadCloud className="h-7 w-7 text-slate-400" aria-hidden="true" />
+                    <span className="mt-2 text-sm font-medium text-slate-700">{file ? file.name : 'Choose a PDF file'}</span>
+                    <span className="text-xs text-slate-500">{file ? `${(file.size / 1024).toFixed(0)} KB` : 'Click to browse'}</span>
+                    <input
+                        id="resume-file"
+                        ref={inputRef}
+                        type="file"
+                        accept="application/pdf"
+                        className="sr-only"
+                        onChange={(e) => { setFile(e.target.files?.[0] || null); setStatus({ tone: '', text: '' }); }}
+                    />
+                </label>
+                {status.text && <Alert tone={status.tone} className="mt-3">{status.text}</Alert>}
+                <button type="submit" disabled={!file || isUploading} className="btn btn-primary mt-4 w-full">
+                    {isUploading ? <Spinner className="h-4 w-4" /> : <UploadCloud className="h-4 w-4" aria-hidden="true" />}
+                    {isUploading ? 'Uploading...' : resume?.fileName ? 'Replace resume' : 'Upload resume'}
+                </button>
+            </form>
+        </SectionCard>
+    );
+};
 
-    if (isFetching) {
-        return <div className="flex justify-center items-center h-screen"><div className="text-xl">Loading Profile...</div></div>;
-    }
+const EditProfile = () => {
+    const [student, setStudent] = useState(EMPTY);
+    const [studentId, setStudentId] = useState('');
+    const [resume, setResume] = useState(null);
+    const [isComplete, setIsComplete] = useState(false);
+    const [isFetching, setIsFetching] = useState(true);
+    const [isSaving, setIsSaving] = useState(false);
+    const [saveStatus, setSaveStatus] = useState({ tone: '', text: '' });
+
+    useEffect(() => {
+        api.get('/student/profile')
+            .then((res) => {
+                const p = res.data?.data || {};
+                setStudent(Object.fromEntries(Object.keys(EMPTY).map((k) => [k, p[k] ?? ''])));
+                setStudentId(p._id);
+                setResume(p.resume || null);
+                setIsComplete(Boolean(p.isProfileComplete));
+            })
+            .catch((err) => setSaveStatus({ tone: 'error', text: errorMessage(err, 'Failed to load your profile') }))
+            .finally(() => setIsFetching(false));
+    }, []);
+
+    const update = (e) => setStudent({ ...student, [e.target.name]: e.target.value });
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        setIsSaving(true);
+        setSaveStatus({ tone: '', text: '' });
+        try {
+            await api.put('/student/complete-profile', student);
+            setSaveStatus({ tone: 'success', text: 'Profile updated successfully!' });
+            setIsComplete(true);
+        } catch (err) {
+            setSaveStatus({ tone: 'error', text: errorMessage(err, 'Failed to update profile') });
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    if (isFetching) return <PageLoader label="Loading profile..." />;
+
+    const input = (name, props = {}) => (
+        <input id={`p-${name}`} name={name} value={student[name]} onChange={update} className="input" {...props} />
+    );
 
     return (
-        <div>
-            {/* <Navbar /> */}
-            <div className="flex-grow container mx-auto px-4 py-8">
-                <h1 className="text-3xl font-bold mb-8 text-center">Edit Profile</h1>
-                <div className="max-w-4xl mx-auto bg-white p-8 rounded-lg shadow-lg">
-                    <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-x-8">
-                        {/* --- Personal Details --- */}
-                        <InputField label="Name" name="name" value={student.name} onChange={handleChange} required />
-                        <InputField label="Email" name="email" value={student.email} onChange={handleChange} type="email" required />
-                        <InputField label="Phone" name="phone" value={student.phone} onChange={handleChange} />
-                        <SelectField label="Gender" name="gender" value={student.gender} onChange={handleChange} options={genderOptions} />
-                        
-                        {/* --- Academic Details --- */}
-                        <SelectField label="Degree" name="degree" value={student.degree} onChange={handleChange} options={degreeOptions} />
-                        <InputField label="Branch" name="branch" value={student.branch} onChange={handleChange} />
-                        <InputField label="Roll No" name="rollNo" value={student.rollNo} onChange={handleChange} />
-                        <InputField label="CGPI" name="cgpi" value={student.cgpi} onChange={handleChange} type="number" placeholder="e.g., 8.5" />
-                        <InputField label="10th Marks (%)" name="tenthMarks" value={student.tenthMarks} onChange={handleChange} type="number" placeholder="e.g., 95" />
-                        <InputField label="12th Marks (%)" name="twelfthMarks" value={student.twelfthMarks} onChange={handleChange} type="number" placeholder="e.g., 92" />
-                        
-                        <InputField
-                            label="Graduating Year" name="graduatingYear" type="number"
-                            value={student.graduatingYear} onChange={handleChange} placeholder="e.g., 2025"
-                        />
-                        
-                        <div></div>
-
-                        {/* --- Form Submission --- */}
-                        <div className="md:col-span-2 mt-4">
-                            <button
-                                type="submit"
-                                className="w-full px-4 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition duration-200 disabled:bg-blue-300"
-                                disabled={isLoading}
-                            >
-                                {isLoading ? 'Saving...' : 'Save Changes'}
-                            </button>
+        <>
+            <PageHeader
+                title="Profile & resume"
+                description="Recruiters see these details. Eligibility for drives is based on your branch, batch and CGPI."
+                actions={isComplete
+                    ? <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200">Profile complete</span>
+                    : <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-800 ring-1 ring-amber-200">Profile incomplete</span>}
+            />
+            <div className="grid gap-6 lg:grid-cols-3">
+                <form onSubmit={handleSubmit} className="space-y-6 lg:col-span-2">
+                    <SectionCard title="Personal details">
+                        <div className="grid gap-4 sm:grid-cols-2">
+                            <Field label="Full name" htmlFor="p-name">{input('name', { required: true, autoComplete: 'name' })}</Field>
+                            <Field label="Email" htmlFor="p-email" hint="Contact the admin to change your email.">{input('email', { disabled: true })}</Field>
+                            <Field label="Phone" htmlFor="p-phone">{input('phone', { required: true, type: 'tel', autoComplete: 'tel' })}</Field>
+                            <Field label="Gender" htmlFor="p-gender">
+                                <select id="p-gender" name="gender" value={student.gender} onChange={update} className="input">
+                                    <option value="">Prefer not to say</option>
+                                    <option value="male">Male</option>
+                                    <option value="female">Female</option>
+                                    <option value="other">Other</option>
+                                </select>
+                            </Field>
                         </div>
-                    </form>
+                    </SectionCard>
+                    <SectionCard title="Academic details">
+                        <div className="grid gap-4 sm:grid-cols-2">
+                            <Field label="Degree" htmlFor="p-degree">
+                                <select id="p-degree" name="degree" value={student.degree} onChange={update} className="input" required>
+                                    <option value="">Select degree</option>
+                                    <option value="btech">B.Tech</option>
+                                    <option value="mtech">M.Tech</option>
+                                    <option value="mba">MBA</option>
+                                </select>
+                            </Field>
+                            <Field label="Branch" htmlFor="p-branch" hint="e.g. IT, ECE, IT-BI">{input('branch', { required: true })}</Field>
+                            <Field label="Roll number" htmlFor="p-rollNo">{input('rollNo', { required: true })}</Field>
+                            <Field label="Graduating year" htmlFor="p-graduatingYear">{input('graduatingYear', { required: true, type: 'number', min: 2000, max: 2100, placeholder: '2027' })}</Field>
+                            <Field label="CGPI" htmlFor="p-cgpi">{input('cgpi', { required: true, type: 'number', step: '0.01', min: 0, max: 10, placeholder: '8.5' })}</Field>
+                            <Field label="10th marks (%)" htmlFor="p-tenthMarks">{input('tenthMarks', { required: true, type: 'number', step: '0.01', min: 0, max: 100 })}</Field>
+                            <Field label="12th marks (%)" htmlFor="p-twelfthMarks">{input('twelfthMarks', { required: true, type: 'number', step: '0.01', min: 0, max: 100 })}</Field>
+                        </div>
+                    </SectionCard>
+                    {saveStatus.text && <Alert tone={saveStatus.tone}>{saveStatus.text}</Alert>}
+                    <div className="flex justify-end">
+                        <button type="submit" disabled={isSaving} className="btn btn-primary">
+                            {isSaving ? <Spinner className="h-4 w-4" /> : <Save className="h-4 w-4" aria-hidden="true" />}
+                            {isSaving ? 'Saving...' : 'Save changes'}
+                        </button>
+                    </div>
+                </form>
+                <div className="lg:col-span-1">
+                    <ResumeSection studentId={studentId} resume={resume} onUploaded={setResume} />
                 </div>
             </div>
-            {/* <Footer /> */}
-        </div>
+        </>
     );
 };
 
 export default EditProfile;
-
