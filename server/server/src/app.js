@@ -7,6 +7,8 @@ import { sanitizeRequest } from "./middlewares/sanitize.middleware.js";
 const app = express();
 
 app.disable("x-powered-by");
+// Behind Vercel's proxy the client IP comes from X-Forwarded-For (used by rate limiting)
+if (process.env.VERCEL) app.set("trust proxy", 1);
 // Security headers. Resumes are opened from the frontend's origin, so allow same-site resource loads.
 app.use(helmet({ crossOriginResourcePolicy: { policy: "same-site" } }));
 

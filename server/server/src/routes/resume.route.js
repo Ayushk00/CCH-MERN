@@ -1,23 +1,25 @@
 import { Router } from "express";
-import fs from "fs";
-import path from "path";
 import Student from "../models/student.model.js";
 import Application from "../models/application.model.js";
 import { verifyAnyUser } from "../middlewares/auth.middleware.js";
-import { RESUME_DIR } from "../middlewares/upload.middleware.js";
+import { findResume, openResumeStream } from "../utils/resumeStorage.js";
 import { ApiError } from "../utils/ApiError.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 
 const resumeRoutes = Router();
 
-const sendPdf = (res, fileName, originalName) => {
-    const filePath = path.join(RESUME_DIR, path.basename(fileName));
-    if (!fs.existsSync(filePath)) {
+const sendPdf = async (res, fileName, originalName) => {
+    const file = await findResume(fileName);
+    if (!file) {
         throw new ApiError(404, "Resume file not found");
     }
     res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `inline; filename="${(originalName || "resume.pdf").replace(/"/g, "")}"`);
-    fs.createReadStream(filePath).pipe(res);
+    res.setHeader("Content-Length", file.length);
+    res.setHeader("Cache-Control", "private, no-store");
+    res.setHeader("Content-Disposition", `inline; filename="${(originalName || "resume.pdf").replace(/[^\w.\- ]/g, "")}"`);
+    await new Promise((resolve, reject) => {
+        openResumeStream(fileName).on("error", reject).pipe(res).on("finish", resolve);
+    });
 };
 
 // Resume submitted with a specific application: the applicant, the hiring company and admins
@@ -35,7 +37,7 @@ resumeRoutes.get("/application/:applicationId", verifyAnyUser, asyncHandler(asyn
         throw new ApiError(403, "You are not allowed to view this resume");
     }
 
-    sendPdf(res, application.resume.fileName, application.resume.originalName);
+    await sendPdf(res, application.resume.fileName, application.resume.originalName);
 }));
 
 // A student's current profile resume: the student and admins
@@ -51,7 +53,7 @@ resumeRoutes.get("/student/:studentId", verifyAnyUser, asyncHandler(async (req, 
     if (!student?.resume?.fileName) {
         throw new ApiError(404, "Resume not found");
     }
-    sendPdf(res, student.resume.fileName, student.resume.originalName);
+    await sendPdf(res, student.resume.fileName, student.resume.originalName);
 }));
 
 export default resumeRoutes;

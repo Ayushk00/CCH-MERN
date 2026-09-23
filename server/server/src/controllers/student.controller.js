@@ -4,14 +4,13 @@ import {ApiError} from '../utils/ApiError.js';
 import {ApiResponse} from '../utils/ApiResponse.js';
 import Job from '../models/job.model.js';
 import jwt from 'jsonwebtoken';
-import fs from 'fs';
-import path from 'path';
+import crypto from 'crypto';
 import Application from '../models/application.model.js';
 import Notice from '../models/notice.model.js';
 import { checkEligibility } from '../utils/eligibility.js';
 import { assertAccountActive } from '../utils/accountStatus.js';
 import { sendMail } from '../utils/mailer.js';
-import { RESUME_DIR } from '../middlewares/upload.middleware.js';
+import { saveResume, deleteResume } from '../utils/resumeStorage.js';
 import { setAuthCookies } from '../utils/cookies.js';
 
 const generateAccessRefreshToken = async (studentId) => {
@@ -297,8 +296,11 @@ const uploadResume = asyncHandler(async (req, res) => {
     const student = await Student.findById(req.student._id);
     const previous = student.resume?.fileName;
 
+    const fileName = `${crypto.randomUUID()}.pdf`;
+    await saveResume(fileName, req.file.buffer, req.file.originalname);
+
     student.resume = {
-        fileName: req.file.filename,
+        fileName,
         originalName: req.file.originalname,
         uploadedAt: new Date(),
     };
@@ -306,7 +308,7 @@ const uploadResume = asyncHandler(async (req, res) => {
 
     // Delete the old file unless an application still references it
     if (previous && !(await Application.exists({ 'resume.fileName': previous }))) {
-        fs.promises.unlink(path.join(RESUME_DIR, previous)).catch(() => {});
+        deleteResume(previous).catch(() => {});
     }
 
     res.status(200).json(new ApiResponse(200, student.resume, "Resume uploaded successfully"));

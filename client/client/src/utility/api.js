@@ -1,6 +1,8 @@
 import axios from 'axios';
 
-export const API_BASE = 'http://localhost:3000/api';
+// Same-origin API: Vercel serves it under /api, and the Vite dev server proxies /api
+// to the local Express server. Keeping one origin lets the auth cookies stay SameSite=Strict.
+export const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
 // Shared client for authenticated API calls (sends the auth cookies)
 const api = axios.create({

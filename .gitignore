@@ -34,3 +34,6 @@ yarn.lock
 # Other
 *.tgz
 *.swp
+
+# Vercel
+.vercel
