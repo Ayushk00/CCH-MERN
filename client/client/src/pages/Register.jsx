@@ -1,127 +1,129 @@
 import React, { useState } from 'react';
-import { ArrowRight } from 'lucide-react';
-import Footer from '../components/Landing/Footer';
-import { handleRegister } from '../functions/register';
+import { Link, Navigate, useNavigate } from 'react-router-dom';
+import { Building2, Check, Eye, EyeOff, GraduationCap, UserPlus } from 'lucide-react';
+import AuthLayout from '../components/layout/AuthLayout';
+import { Alert, Field, Spinner } from '../components/ui';
+import api, { errorMessage } from '../utility/api';
+import { useAuth, HOME_BY_ROLE } from '../utility/AuthContext';
+
+const ROLES = [
+    { value: 'student', label: 'Student', description: 'Apply to campus drives', icon: GraduationCap },
+    { value: 'company', label: 'Recruiter', description: 'Hire from campus', icon: Building2 },
+];
+
+const PASSWORD_RULES = [
+    { test: (p) => p.length >= 8, label: 'At least 8 characters' },
+    { test: (p) => /[A-Za-z]/.test(p), label: 'Contains a letter' },
+    { test: (p) => /\d/.test(p), label: 'Contains a number' },
+];
 
 export function Register() {
-    const [role, setRole] = useState('');
-    const [name, setName] = useState('');
-    const [email, setEmail] = useState('');
-    const [password, setPassword] = useState('');
+    const { status, role: currentRole } = useAuth();
+    const navigate = useNavigate();
+    const [form, setForm] = useState({ name: '', email: '', password: '', role: '' });
+    const [showPassword, setShowPassword] = useState(false);
+    const [error, setError] = useState('');
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
-    const handleSubmit = (e) => {
+    if (status === 'authenticated') {
+        return <Navigate to={HOME_BY_ROLE[currentRole]} replace />;
+    }
+
+    const passwordOk = PASSWORD_RULES.every((rule) => rule.test(form.password));
+    const canSubmit = form.name.trim() && form.email.trim() && passwordOk && form.role && !isSubmitting;
+
+    const update = (key) => (e) => setForm({ ...form, [key]: e.target.value });
+
+    const handleSubmit = async (e) => {
         e.preventDefault();
-        handleRegister(e, name, email, password, role);
+        setError('');
+        if (!form.role) {
+            setError('Please choose whether you are a student or a recruiter.');
+            return;
+        }
+        setIsSubmitting(true);
+        try {
+            await api.post('/auth/register', form);
+            navigate('/login?registered=1', { replace: true });
+        } catch (err) {
+            setError(errorMessage(err, 'Registration failed. Please try again.'));
+        } finally {
+            setIsSubmitting(false);
+        }
     };
 
     return (
-        <section className="flex flex-col min-h-screen bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 text-white">
-            <div className="flex-grow flex items-center justify-center px-4 py-4 sm:px-6 sm:py-8 lg:px-8 lg:py-12">
-                <div className="xl:mx-auto xl:w-full xl:max-w-sm 2xl:max-w-md">
-                    <div className="mb-2 flex justify-center">
-                        <svg
-                            width="50"
-                            height="56"
-                            viewBox="0 0 50 56"
-                            fill="none"
-                            xmlns="http://www.w3.org/2000/svg">
-                            <path
-                                d="M23.2732 0.2528C20.8078 1.18964 2.12023 12.2346 1.08477 13.3686C0 14.552 0 14.7493 0 27.7665C0 39.6496 0.0986153 41.1289 0.83823 42.0164C2.12023 43.5449 23.2239 55.4774 24.6538 55.5267C25.9358 55.576 46.1027 44.3832 48.2229 42.4602C49.3077 41.474 49.3077 41.3261 49.3077 27.8158C49.3077 14.3055 49.3077 14.1576 48.2229 13.1714C46.6451 11.7415 27.1192 0.450027 25.64 0.104874C24.9497 -0.0923538 23.9142 0.00625992 23.2732 0.2528ZM20.2161 21.8989C20.2161 22.4906 18.9835 23.8219 17.0111 25.3997C15.2361 26.7803 13.8061 27.9637 13.8061 28.0623C13.8061 28.1116 15.2361 29.0978 16.9618 30.2319C18.6876 31.3659 20.2655 32.6479 20.4134 33.0917C20.8078 34.0286 19.871 35.2119 18.8355 35.2119C17.8001 35.2119 9.0233 29.3936 8.67815 28.5061C8.333 27.6186 9.36846 26.5338 14.3485 22.885C17.6521 20.4196 18.4904 20.0252 19.2793 20.4196C19.7724 20.7155 20.2161 21.3565 20.2161 21.8989ZM25.6893 27.6679C23.4211 34.9161 23.0267 35.7543 22.1391 34.8668C21.7447 34.4723 22.1391 32.6479 23.6677 27.9637C26.2317 20.321 26.5275 19.6307 27.2671 20.3703C27.6123 20.7155 27.1685 22.7864 25.6893 27.6679ZM36.0932 23.2302C40.6788 26.2379 41.3198 27.0269 40.3337 28.1609C39.1503 29.5909 31.6555 35.2119 30.9159 35.2119C29.9298 35.2119 28.9436 33.8806 29.2394 33.0424C29.3874 32.6479 30.9652 31.218 32.7403 29.8867L35.9946 27.4706L32.5431 25.1532C30.6201 23.9205 29.0915 22.7371 29.0915 22.5892C29.0915 21.7509 30.2256 20.4196 30.9159 20.4196C31.3597 20.4196 33.6771 21.7016 36.0932 23.2302Z"
-                                fill="white"
-                            />
-                        </svg>
+        <AuthLayout
+            title="Create your account"
+            subtitle={<>Already have an account? <Link to="/login" className="link">Sign in</Link></>}
+        >
+            <form onSubmit={handleSubmit} className="space-y-5" noValidate>
+                <fieldset>
+                    <legend className="label">I am a</legend>
+                    <div className="grid grid-cols-2 gap-3">
+                        {ROLES.map(({ value, label, description, icon: Icon }) => {
+                            const selected = form.role === value;
+                            return (
+                                <label
+                                    key={value}
+                                    className={`relative flex cursor-pointer flex-col gap-1 rounded-xl border p-4 transition ${
+                                        selected ? 'border-brand-600 bg-brand-50 ring-1 ring-brand-600' : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                                    }`}
+                                >
+                                    <input type="radio" name="role" value={value} checked={selected} onChange={update('role')} className="sr-only" />
+                                    <Icon className={`h-5 w-5 ${selected ? 'text-brand-600' : 'text-slate-400'}`} aria-hidden="true" />
+                                    <span className="text-sm font-semibold text-slate-900">{label}</span>
+                                    <span className="text-xs text-slate-500">{description}</span>
+                                    {selected && <Check className="absolute right-3 top-3 h-4 w-4 text-brand-600" aria-hidden="true" />}
+                                </label>
+                            );
+                        })}
                     </div>
-                    <h2 className="text-center text-2xl font-bold leading-tight text-white">
-                        Sign up to create account
-                    </h2>
-                    <p className="mt-2 text-center text-sm text-gray-400">
-                        Already have an account?{' '}
-                        <a
-                            href="/login"
-                            title=""
-                            className="font-semibold text-white transition-all duration-200 hover:underline">
-                            Sign In
-                        </a>
-                    </p>
-                    <form onSubmit={handleSubmit}>
-                        <div className="space-y-5">
-                            <div>
-                                <label htmlFor="name" className="text-base font-medium text-white">
-                                    {' '}
-                                    Full Name{' '}
-                                </label>
-                                <div className="mt-2">
-                                    <input
-                                        className="flex h-10 w-full rounded-md border border-gray-300 bg-transparent px-3 py-2 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-400 focus:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50"
-                                        type="text"
-                                        placeholder="Full Name"
-                                        id="name"
-                                        required
-                                        onChange={(e) => setName(e.target.value)}></input>
-                                </div>
-                            </div>
-                            <div>
-                                <label htmlFor="email" className="text-base font-medium text-white">
-                                    {' '}
-                                    Email address{' '}
-                                </label>
-                                <div className="mt-2">
-                                    <input
-                                        className="flex h-10 w-full rounded-md border border-gray-300 bg-transparent px-3 py-2 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-400 focus:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50"
-                                        type="email"
-                                        placeholder="Email"
-                                        id="email"
-                                        onChange={(e) => setEmail(e.target.value)}></input>
-                                </div>
-                            </div>
-                            <div>
-                                <div className="flex items-center justify-between">
-                                    <label htmlFor="password" className="text-base font-medium text-white">
-                                        {' '}
-                                        Password{' '}
-                                    </label>
-                                </div>
-                                <div className="mt-2">
-                                    <input
-                                        className="flex h-10 w-full rounded-md border border-gray-300 bg-transparent px-3 py-2 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-400 focus:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50"
-                                        type="password"
-                                        placeholder="Password"
-                                        id="password"
-                                        onChange={(e) => setPassword(e.target.value)}></input>
-                                </div>
-                            </div>
-                            <div>
-                                <label className="text-base font-medium text-white">Select Role</label>
-                                <div className="mt-2 flex space-x-4">
-                                    <div
-                                        className={`p-4 bg-blue-800 rounded-lg cursor-pointer hover:bg-blue-700 transform hover:scale-105 transition-transform duration-300 shadow-lg ${role === 'company' ? 'border-2 border-white' : ''}`}
-                                        onClick={() => setRole('company')}>
-                                        <div className="flex flex-col items-center">
-                                            <h3 className="text-xl font-semibold">Recruiter</h3>
-                                        </div>
-                                    </div>
-                                    <div
-                                        className={`p-4 bg-green-800 rounded-lg cursor-pointer hover:bg-green-700 transform hover:scale-105 transition-transform duration-300 shadow-lg ${role === 'student' ? 'border-2 border-white' : ''}`}
-                                        onClick={() => setRole('student')}>
-                                        <div className="flex flex-col items-center">
-                                            <h3 className="text-xl font-semibold">Student</h3>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                            <div>
-                                <button
-                                    type="submit"
-                                    className="inline-flex w-full items-center justify-center rounded-md bg-white px-3.5 py-2.5 font-semibold leading-7 text-black hover:bg-white/80">
-                                    Create Account <ArrowRight className="ml-2" size={16} />
-                                </button>
-                            </div>
-                        </div>
-                    </form>
-                </div>
-            </div>
-            <Footer />
-        </section>
+                </fieldset>
+
+                <Field label={form.role === 'company' ? 'Company name' : 'Full name'} htmlFor="reg-name">
+                    <input id="reg-name" className="input" autoComplete="name" value={form.name} onChange={update('name')} required maxLength={100} />
+                </Field>
+                <Field label="Email address" htmlFor="reg-email">
+                    <input id="reg-email" type="email" className="input" autoComplete="email" placeholder="you@example.com" value={form.email} onChange={update('email')} required />
+                </Field>
+                <Field label="Password" htmlFor="reg-password">
+                    <div className="relative">
+                        <input
+                            id="reg-password"
+                            type={showPassword ? 'text' : 'password'}
+                            className="input pr-10"
+                            autoComplete="new-password"
+                            value={form.password}
+                            onChange={update('password')}
+                            required
+                        />
+                        <button type="button" onClick={() => setShowPassword((v) => !v)} className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-400 hover:text-slate-600" aria-label={showPassword ? 'Hide password' : 'Show password'}>
+                            {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                    </div>
+                    <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+                        {PASSWORD_RULES.map((rule) => {
+                            const ok = rule.test(form.password);
+                            return (
+                                <li key={rule.label} className={`flex items-center gap-1 text-xs ${ok ? 'text-emerald-600' : 'text-slate-500'}`}>
+                                    <Check className={`h-3.5 w-3.5 ${ok ? 'opacity-100' : 'opacity-30'}`} aria-hidden="true" />
+                                    {rule.label}
+                                </li>
+                            );
+                        })}
+                    </ul>
+                </Field>
+
+                {error && <Alert tone="error">{error}</Alert>}
+
+                <button type="submit" disabled={!canSubmit} className="btn btn-primary btn-lg w-full">
+                    {isSubmitting ? <Spinner className="h-4 w-4" /> : <UserPlus className="h-4 w-4" aria-hidden="true" />}
+                    {isSubmitting ? 'Creating account...' : 'Create account'}
+                </button>
+                <p className="text-center text-xs text-slate-500">New accounts are reviewed by the placement cell before they can sign in.</p>
+            </form>
+        </AuthLayout>
     );
 }
 

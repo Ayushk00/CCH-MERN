@@ -1,125 +1,221 @@
-import React, {useEffect} from "react";
-import { ArrowRight } from "lucide-react";
-import { useState } from "react";
-import Footer from "../components/Landing/Footer";
-import { useAuth } from "../utility/AuthContext";
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Eye, EyeOff, LogIn, ShieldAlert } from "lucide-react";
+import AuthLayout from "../components/layout/AuthLayout";
+import { Alert, Avatar, Field, Spinner } from "../components/ui";
+import { useAuth, HOME_BY_ROLE, ROLE_LABELS, isPathAllowedForRole } from "../utility/AuthContext";
+import api from "../utility/api";
+
+const REASON_MESSAGES = {
+    auth: { tone: 'info', title: 'Please sign in to continue', text: 'You need to be signed in to open that page.' },
+    expired: { tone: 'warning', title: 'Your session has ended', text: 'Please sign in again to continue.' },
+    loggedout: { tone: 'success', title: 'You have been signed out', text: null },
+};
+
+const BLOCKED_MESSAGES = {
+    ACCOUNT_DISABLED: "Your account has been disabled by the admin. You can ask the admin to enable it again.",
+    ACCOUNT_PENDING: "Your profile isn't enabled yet. Please wait for the admin to approve your account.",
+};
+
+// Only same-app, absolute paths are accepted as a post-login destination
+const safeFrom = (value) => (value && value.startsWith('/') && !value.startsWith('//') ? value : '');
 
 export function Login() {
-        const { user, role } = useAuth();
-        const navigate = useNavigate();
-    
-        useEffect(() => {
-            if (user) {
-                if (role === 'student') {
-                    navigate('/student');
-                } else if (role === 'company') {
-                    navigate('/company');
-                }
-            }
-        }, [user, role, navigate]);
+    const { status, user, role, login, logout } = useAuth();
+    const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
+    const reason = searchParams.get('reason');
+    const from = safeFrom(searchParams.get('from'));
 
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
-    const { login } = useAuth();
-    
+    const [showPassword, setShowPassword] = useState(false);
+    const [error, setError] = useState("");
+    const [blockCode, setBlockCode] = useState(searchParams.get('blocked') || "");
+    const [enableRequested, setEnableRequested] = useState(false);
+    const [showRequestForm, setShowRequestForm] = useState(false);
+    const [requestMessage, setRequestMessage] = useState("");
+    const [requestStatus, setRequestStatus] = useState({ type: "", text: "" });
+    const [isSubmitting, setIsSubmitting] = useState(false);
+
+    // A signed-in user who was NOT sent here because of a forbidden/unknown URL goes straight to their portal
+    const explainsRedirect = reason === 'denied' || reason === 'notfound';
+    useEffect(() => {
+        if (status === 'authenticated' && !explainsRedirect) {
+            navigate(isPathAllowedForRole(from, role) ? from : HOME_BY_ROLE[role], { replace: true });
+        }
+    }, [status, role, from, explainsRedirect, navigate]);
+
     const handleLogin = async (e) => {
         e.preventDefault();
-        login(email, password);
+        setError("");
+        setBlockCode("");
+        setShowRequestForm(false);
+        setRequestStatus({ type: "", text: "" });
+        setIsSubmitting(true);
+        const result = await login(email, password);
+        setIsSubmitting(false);
+        if (result.success) {
+            navigate(isPathAllowedForRole(from, result.role) ? from : HOME_BY_ROLE[result.role], { replace: true });
+            return;
+        }
+        if (result.code === 'ACCOUNT_DISABLED' || result.code === 'ACCOUNT_PENDING') {
+            setBlockCode(result.code);
+            setEnableRequested(Boolean(result.enableRequested));
+        } else {
+            setError(result.message);
+        }
     };
 
-    return (
-        <section className="flex flex-col min-h-screen bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 text-white">
-            <div className="flex-grow flex items-center justify-center px-4 py-10 sm:px-6 sm:py-16 lg:px-8 lg:py-24">
-                <div className="xl:mx-auto xl:w-full xl:max-w-sm 2xl:max-w-md">
-                    <div className="mb-2 flex justify-center">
-                        <svg
-                            width="50"
-                            height="56"
-                            viewBox="0 0 50 56"
-                            fill="none"
-                            xmlns="http://www.w3.org/2000/svg"
-                        >
-                            <path
-                                d="M23.2732 0.2528C20.8078 1.18964 2.12023 12.2346 1.08477 13.3686C0 14.552 0 14.7493 0 27.7665C0 39.6496 0.0986153 41.1289 0.83823 42.0164C2.12023 43.5449 23.2239 55.4774 24.6538 55.5267C25.9358 55.576 46.1027 44.3832 48.2229 42.4602C49.3077 41.474 49.3077 41.3261 49.3077 27.8158C49.3077 14.3055 49.3077 14.1576 48.2229 13.1714C46.6451 11.7415 27.1192 0.450027 25.64 0.104874C24.9497 -0.0923538 23.9142 0.00625992 23.2732 0.2528ZM20.2161 21.8989C20.2161 22.4906 18.9835 23.8219 17.0111 25.3997C15.2361 26.7803 13.8061 27.9637 13.8061 28.0623C13.8061 28.1116 15.2361 29.0978 16.9618 30.2319C18.6876 31.3659 20.2655 32.6479 20.4134 33.0917C20.8078 34.0286 19.871 35.2119 18.8355 35.2119C17.8001 35.2119 9.0233 29.3936 8.67815 28.5061C8.333 27.6186 9.36846 26.5338 14.3485 22.885C17.6521 20.4196 18.4904 20.0252 19.2793 20.4196C19.7724 20.7155 20.2161 21.3565 20.2161 21.8989ZM25.6893 27.6679C23.4211 34.9161 23.0267 35.7543 22.1391 34.8668C21.7447 34.4723 22.1391 32.6479 23.6677 27.9637C26.2317 20.321 26.5275 19.6307 27.2671 20.3703C27.6123 20.7155 27.1685 22.7864 25.6893 27.6679ZM36.0932 23.2302C40.6788 26.2379 41.3198 27.0269 40.3337 28.1609C39.1503 29.5909 31.6555 35.2119 30.9159 35.2119C29.9298 35.2119 28.9436 33.8806 29.2394 33.0424C29.3874 32.6479 30.9652 31.218 32.7403 29.8867L35.9946 27.4706L32.5431 25.1532C30.6201 23.9205 29.0915 22.7371 29.0915 22.5892C29.0915 21.7509 30.2256 20.4196 30.9159 20.4196C31.3597 20.4196 33.6771 21.7016 36.0932 23.2302Z"
-                                fill="white"
-                            />
-                        </svg>
-                    </div>
-                    <h2 className="text-center text-2xl font-bold leading-tight text-white">
-                        Sign in to your account
-                    </h2>
-                    <p className="mt-2 text-center text-sm text-gray-400">
-                        Don&apos;t have an account?{" "}
-                        <a
-                            href="/register"
-                            title=""
-                            className="font-semibold text-white transition-all duration-200 hover:underline"
-                        >
-                            Create a free account
-                        </a>
-                    </p>
+    const handleRequestEnable = async (e) => {
+        e.preventDefault();
+        if (!email || !password) {
+            setRequestStatus({ type: "error", text: "Enter your email and password above so we can verify your account." });
+            return;
+        }
+        try {
+            const res = await api.post('/auth/request-enable', { email, password, message: requestMessage });
+            setRequestStatus({ type: "success", text: res.data?.message || "Your request has been sent to the admin." });
+            setEnableRequested(true);
+            setShowRequestForm(false);
+        } catch (err) {
+            setRequestStatus({ type: "error", text: err.response?.data?.message || "Could not send the request. Please try again." });
+        }
+    };
 
-                    <form onSubmit={handleLogin}>
-                        <div className="space-y-5">
-                            <div>
-                                <label
-                                    htmlFor=""
-                                    className="text-base font-medium text-white"
-                                >
-                                    {" "}
-                                    Email address{" "}
-                                </label>
-                                <div className="mt-2">
-                                    <input
-                                        className="flex h-10 w-full rounded-md border border-gray-300 bg-transparent px-3 py-2 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-400 focus:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50"
-                                        type="email"
-                                        placeholder="Email"
-                                        onChange={(e) => setEmail(e.target.value)}
-                                    ></input>
-                                </div>
-                            </div>
-                            <div>
-                                <div className="flex items-center justify-between">
-                                    <label
-                                        htmlFor=""
-                                        className="text-base font-medium text-white"
-                                    >
-                                        {" "}
-                                        Password{" "}
-                                    </label>
-                                    <a
-                                        href="#"
-                                        title=""
-                                        className="text-sm font-semibold text-white hover:underline"
-                                    >
-                                        {" "}
-                                        Forgot password?{" "}
-                                    </a>
-                                </div>
-                                <div className="mt-2">
-                                    <input
-                                        className="flex h-10 w-full rounded-md border border-gray-300 bg-transparent px-3 py-2 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-400 focus:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50"
-                                        type="password"
-                                        placeholder="Password"
-                                        onChange={(e) => setPassword(e.target.value)}
-                                    ></input>
-                                </div>
-                            </div>
-                            <div>
-                                <button
-                                    type="submit"
-                                    className="inline-flex w-full items-center justify-center rounded-md bg-white px-3.5 py-2.5 font-semibold leading-7 text-black hover:bg-white/80"
-                                >
-                                    LogIn <ArrowRight className="ml-2" size={16} />
-                                </button>
-                            </div>
+    // Signed in, but the requested URL is not allowed for this account (or doesn't exist)
+    if (status === 'authenticated' && explainsRedirect) {
+        return (
+            <AuthLayout
+                title={reason === 'denied' ? "You don't have access to that page" : "Page not found"}
+                subtitle={reason === 'denied'
+                    ? "The page you tried to open belongs to a different type of account."
+                    : "The address you opened doesn't exist."}
+            >
+                <div className="card card-body">
+                    <div className="flex items-center gap-3">
+                        <Avatar name={user?.name} size="h-11 w-11 text-base" />
+                        <div className="min-w-0">
+                            <p className="truncate font-semibold text-slate-900">{user?.name}</p>
+                            <p className="truncate text-sm text-slate-500">Signed in as {ROLE_LABELS[role]} · {user?.email}</p>
                         </div>
-                    </form>
+                    </div>
+                    {from && (
+                        <p className="mt-4 flex items-start gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                            <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" aria-hidden="true" />
+                            <span>Requested: <code className="break-all font-mono text-xs">{from}</code></span>
+                        </p>
+                    )}
+                    <div className="mt-6 flex flex-col gap-2 sm:flex-row">
+                        <button onClick={() => navigate(HOME_BY_ROLE[role], { replace: true })} className="btn btn-primary flex-1">Go to my dashboard</button>
+                        <button onClick={() => logout({ redirect: false })} className="btn btn-secondary flex-1">Sign in as someone else</button>
+                    </div>
                 </div>
+            </AuthLayout>
+        );
+    }
+
+    const reasonMessage = REASON_MESSAGES[reason];
+
+    return (
+        <AuthLayout
+            title="Welcome back"
+            subtitle={<>Don&apos;t have an account? <Link to="/register" className="link">Create one</Link></>}
+        >
+            <div className="space-y-4">
+                {status === 'loading' && <div className="flex justify-center text-slate-400"><Spinner /></div>}
+                {reason === 'notfound' && status !== 'loading' && (
+                    <Alert tone="info" title="Page not found">That page doesn&apos;t exist. Sign in to go to your dashboard.</Alert>
+                )}
+                {reasonMessage && !blockCode && <Alert tone={reasonMessage.tone} title={reasonMessage.title}>{reasonMessage.text}</Alert>}
+                {searchParams.get('registered') && !blockCode && (
+                    <Alert tone="success" title="Registration successful">
+                        Your account is awaiting admin approval. You can sign in once the admin enables your profile.
+                    </Alert>
+                )}
+                {blockCode === 'ACCOUNT_PENDING' && <Alert tone="warning" title="Profile not enabled yet">{BLOCKED_MESSAGES.ACCOUNT_PENDING}</Alert>}
+                {blockCode === 'ACCOUNT_DISABLED' && (
+                    <Alert tone="error" title="Account disabled">
+                        <p>{BLOCKED_MESSAGES.ACCOUNT_DISABLED}</p>
+                        {enableRequested && !showRequestForm && (
+                            <p className="mt-2 font-medium text-emerald-700">Your request to enable this profile has been sent. The admin will review it.</p>
+                        )}
+                        {!showRequestForm && (
+                            <button
+                                type="button"
+                                onClick={() => { setShowRequestForm(true); setRequestStatus({ type: "", text: "" }); }}
+                                className="btn btn-secondary btn-sm mt-3"
+                            >
+                                {enableRequested ? 'Send another request' : 'Request admin to enable my profile'}
+                            </button>
+                        )}
+                        {showRequestForm && (
+                            <form onSubmit={handleRequestEnable} className="mt-3 space-y-2">
+                                <label htmlFor="request-message" className="block text-xs font-medium">Message to the admin (optional)</label>
+                                <textarea
+                                    id="request-message"
+                                    rows={3}
+                                    maxLength={500}
+                                    value={requestMessage}
+                                    onChange={(e) => setRequestMessage(e.target.value)}
+                                    className="input"
+                                    placeholder="Why should your account be enabled?"
+                                />
+                                <div className="flex gap-2">
+                                    <button type="submit" className="btn btn-primary btn-sm">Send request</button>
+                                    <button type="button" onClick={() => setShowRequestForm(false)} className="btn btn-ghost btn-sm">Cancel</button>
+                                </div>
+                            </form>
+                        )}
+                        {requestStatus.text && (
+                            <p className={`mt-2 font-medium ${requestStatus.type === 'success' ? 'text-emerald-700' : 'text-rose-700'}`}>{requestStatus.text}</p>
+                        )}
+                    </Alert>
+                )}
+                {error && <Alert tone="error">{error}</Alert>}
             </div>
-            <Footer />
-        </section>
+
+            <form onSubmit={handleLogin} className="mt-6 space-y-5" noValidate>
+                <Field label="Email address" htmlFor="login-email">
+                    <input
+                        id="login-email"
+                        className="input"
+                        type="email"
+                        autoComplete="email"
+                        placeholder="you@example.com"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        required
+                    />
+                </Field>
+                <Field label="Password" htmlFor="login-password">
+                    <div className="relative">
+                        <input
+                            id="login-password"
+                            className="input pr-10"
+                            type={showPassword ? 'text' : 'password'}
+                            autoComplete="current-password"
+                            placeholder="Your password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            required
+                        />
+                        <button
+                            type="button"
+                            onClick={() => setShowPassword((v) => !v)}
+                            className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-400 hover:text-slate-600"
+                            aria-label={showPassword ? 'Hide password' : 'Show password'}
+                        >
+                            {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                    </div>
+                </Field>
+                <button type="submit" disabled={isSubmitting || !email || !password} className="btn btn-primary btn-lg w-full">
+                    {isSubmitting ? <Spinner className="h-4 w-4" /> : <LogIn className="h-4 w-4" aria-hidden="true" />}
+                    {isSubmitting ? 'Signing in...' : 'Sign in'}
+                </button>
+            </form>
+        </AuthLayout>
     );
 }
 
