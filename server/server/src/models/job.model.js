@@ -11,7 +11,7 @@ const jobSchema = new Schema({
     type: {
         type: String,
         required: true,
-        enum: ['internship', 'full-time']
+        enum: ['internship', 'full-time', 'part-time']
     },
     ctc: {
         type: Number,
@@ -20,7 +20,8 @@ const jobSchema = new Schema({
     eligibleBranches: [{
         type: String,
         required: true,
-        enum: ['it', 'ece', 'it-bi', 'all']
+        lowercase: true,
+        trim: true
     }],
     lastDate: {
         type: Date,

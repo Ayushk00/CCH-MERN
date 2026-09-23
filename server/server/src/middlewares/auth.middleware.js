@@ -1,10 +1,14 @@
 import jwt from 'jsonwebtoken';
-import Student from '../models/student.model.js'; 
+import Student from '../models/student.model.js';
 import Company from '../models/company.model.js';
+import Admin from '../models/admin.model.js';
 import { ApiError } from '../utils/ApiError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
+import { assertAccountActive } from '../utils/accountStatus.js';
 
-const verifyUser = (role, Model) => asyncHandler(async (req, res, next) => {
+const MODELS = { student: Student, company: Company, admin: Admin };
+
+const decodeToken = (req) => {
     const token = req.cookies?.accessToken || req.header('Authorization')?.replace("Bearer ", "");
 
     if (!token) {
@@ -12,26 +16,51 @@ const verifyUser = (role, Model) => asyncHandler(async (req, res, next) => {
     }
 
     try {
-        const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
-
-        if (decoded.role !== role) {
-            throw new ApiError(401, `You are not authorized to access this route as a ${role}`);
-        }
-
-        const user = await Model.findOne({ _id: decoded._id }).select('-password -refreshtoken -passwordResetToken');
-
-        if (!user) {
-            throw new ApiError(401, 'Please authenticate');
-        }
-
-        req[role] = user;
-        next();
+        return jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
     } catch (error) {
         throw new ApiError(401, 'Please authenticate');
     }
+};
+
+const loadUser = async (decoded) => {
+    const Model = MODELS[decoded.role];
+    if (!Model) {
+        throw new ApiError(401, 'Please authenticate');
+    }
+
+    const user = await Model.findOne({ _id: decoded._id }).select('-password -refreshToken -passwordResetToken');
+    if (!user) {
+        throw new ApiError(401, 'Please authenticate');
+    }
+
+    // Students and recruiters lose access as soon as the admin disables them
+    if (decoded.role !== 'admin') {
+        assertAccountActive(user, decoded.role);
+    }
+    return user;
+};
+
+const verifyUser = (role) => asyncHandler(async (req, res, next) => {
+    const decoded = decodeToken(req);
+
+    if (decoded.role !== role) {
+        throw new ApiError(401, `You are not authorized to access this route as a ${role}`);
+    }
+
+    req[role] = await loadUser(decoded);
+    next();
 });
 
-const verifyStudent = verifyUser('student', Student);
-const verifyCompany = verifyUser('company', Company);
+// Any logged-in role; sets req.user and req.role
+const verifyAnyUser = asyncHandler(async (req, res, next) => {
+    const decoded = decodeToken(req);
+    req.user = await loadUser(decoded);
+    req.role = decoded.role;
+    next();
+});
 
-export { verifyStudent, verifyCompany };
+const verifyStudent = verifyUser('student');
+const verifyCompany = verifyUser('company');
+const verifyAdmin = verifyUser('admin');
+
+export { verifyStudent, verifyCompany, verifyAdmin, verifyAnyUser };

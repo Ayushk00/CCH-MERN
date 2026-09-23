@@ -72,6 +72,33 @@ const studentSchema = new Schema({
         type: Boolean,
         default: false
     },
+    placedCompany: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Company'
+    },
+    placedJob: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Job'
+    },
+    resume: {
+        fileName: String,
+        originalName: String,
+        uploadedAt: Date
+    },
+    // Access to the portal is controlled by the admin: new accounts wait for approval
+    accountStatus: {
+        type: String,
+        enum: ['pending', 'active', 'disabled'],
+        default: 'pending'
+    },
+    enableRequest: {
+        requested: {
+            type: Boolean,
+            default: false
+        },
+        message: String,
+        requestedAt: Date
+    },
     appliedJobs: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Job'
@@ -93,11 +120,9 @@ const studentSchema = new Schema({
     timestamps: true
 });
 
-studentSchema.pre("save", async function (next) {
+studentSchema.pre("save", async function () {
     if (!this.isModified("password")) return;
-
     this.password = await bcrypt.hash(this.password, 10);
-    next();
 });
 
 studentSchema.methods.isValidPassword = async function (password) {

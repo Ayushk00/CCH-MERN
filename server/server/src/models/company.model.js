@@ -48,6 +48,20 @@ const companySchema = new Schema({
         type: Boolean,
         default: false
     },
+    // Access to the portal is controlled by the admin: new accounts wait for approval
+    accountStatus: {
+        type: String,
+        enum: ['pending', 'active', 'disabled'],
+        default: 'pending'
+    },
+    enableRequest: {
+        requested: {
+            type: Boolean,
+            default: false
+        },
+        message: String,
+        requestedAt: Date
+    },
     refreshToken: {
         type: String,
     },
@@ -58,10 +72,9 @@ const companySchema = new Schema({
     timestamps: true
 });
 
-companySchema.pre("save", async function (next) {
-    if (!this.isModified("password")) return next();
+companySchema.pre("save", async function () {
+    if (!this.isModified("password")) return;
     this.password = await bcrypt.hash(this.password, 10);
-    next();
 });
 
 companySchema.methods.isValidPassword = async function (password) {
