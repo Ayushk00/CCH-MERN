@@ -1,30 +1,62 @@
 import express from "express";
 import cookieParser from "cookie-parser";
 import cors from "cors";
+import helmet from "helmet";
+import { sanitizeRequest } from "./middlewares/sanitize.middleware.js";
 
 const app = express();
 
+app.disable("x-powered-by");
+// Security headers. Resumes are opened from the frontend's origin, so allow same-site resource loads.
+app.use(helmet({ crossOriginResourcePolicy: { policy: "same-site" } }));
+
 
 app.use(cors({
-    origin: 'http://localhost:5173',
+    origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
     credentials: true,
 }));
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true}));
+app.use(express.json({ limit: "100kb" }));
+app.use(express.urlencoded({ extended: true, limit: "100kb" }));
 app.use(express.static("Public"));
 app.use(cookieParser());
+app.use(sanitizeRequest);
 
 //Route imports here
 import studentRoutes from "./routes/student.route.js";
 import companyRoutes from "./routes/company.route.js";
 import adminRoutes from "./routes/admin.route.js";
 import authRoutes from "./routes/auth.route.js";
+import resumeRoutes from "./routes/resume.route.js";
 
 //Routes
 app.use("/api/admin", adminRoutes);
 app.use("/api/student", studentRoutes);
 app.use("/api/company", companyRoutes);
 app.use("/api/auth", authRoutes);
+app.use("/api/resume", resumeRoutes);
+
+// Unknown API routes
+app.use("/api", (req, res) => {
+    res.status(404).json({ statusCode: 404, success: false, message: "Not found", data: null, errors: [] });
+});
+
+// Error handler: return ApiError (and unexpected errors) as JSON instead of Express's HTML page
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+    const statusCode = Number.isInteger(err.statusCode)
+        ? err.statusCode
+        : (err.name === "ValidationError" || err.name === "CastError") ? 400 : 500;
+    if (statusCode >= 500) console.error(err);
+    // Never leak internal error details (stack traces, database messages) to clients
+    const isExpected = Number.isInteger(err.statusCode) || statusCode < 500;
+    res.status(statusCode).json({
+        statusCode,
+        success: false,
+        message: isExpected ? (err.message || "Request failed") : "Internal Server Error",
+        data: err.data ?? null,
+        errors: err.errors || [],
+    });
+});
 
 export { app };

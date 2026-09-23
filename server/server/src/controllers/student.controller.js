@@ -3,6 +3,16 @@ import Student from '../models/student.model.js';
 import {ApiError} from '../utils/ApiError.js';
 import {ApiResponse} from '../utils/ApiResponse.js';
 import Job from '../models/job.model.js';
+import jwt from 'jsonwebtoken';
+import fs from 'fs';
+import path from 'path';
+import Application from '../models/application.model.js';
+import Notice from '../models/notice.model.js';
+import { checkEligibility } from '../utils/eligibility.js';
+import { assertAccountActive } from '../utils/accountStatus.js';
+import { sendMail } from '../utils/mailer.js';
+import { RESUME_DIR } from '../middlewares/upload.middleware.js';
+import { setAuthCookies } from '../utils/cookies.js';
 
 const generateAccessRefreshToken = async (studentId) => {
     try {
@@ -22,97 +32,6 @@ const generateAccessRefreshToken = async (studentId) => {
         throw new ApiError(500,error, "Token generation failed");
     }
 };
-
-const registerStudent = asyncHandler(async (req, res) => {
-    const { name, email, password } = req.body;
-
-    if (!name || !email || !password) {
-        throw new ApiError(400, "All fields are required");
-    }
-
-    if (password.length < 6) {
-        throw new ApiError(400, "Password should be at least 6 characters long");
-    }
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-        throw new ApiError(400, "Invalid email format");
-    }
-
-    const nameRegex = /^[a-zA-Z\s]+$/;
-    if (!nameRegex.test(name)) {
-        throw new ApiError(400, "Name should contain only alphabets and spaces");
-    }
-
-    const studentExists = await Student.findOne({ email });
-    if (studentExists) {
-        throw new ApiError(400, "Student already exists");
-    }
-
-    const student = await Student.create({ name, email, password });
-
-    const createdStudent = await Student.findOne({ email }).select("-password -refreshToken" );
-    if (!createdStudent) {
-        throw new ApiError(500, "Student registration failed");
-    }
-
-    const response = new ApiResponse(201, createdStudent);
-    res.status(response.statusCode).json(response);
-});
-
-const loginStudent = asyncHandler(async (req, res) => {
-
-    const { email, password } = req.body;
-
-    if (!email) {
-        throw new ApiError(400, "Email is required");
-    }
-
-    const student = await Student.findOne({ email });
-    if (!student) {
-        throw new ApiError(401, "Student not found");
-    }
-
-    const isValidPassword = await student.isValidPassword(password);
-
-    if (!isValidPassword) {
-        throw new ApiError(401, "Invalid credentials");
-    }
-
-    const { accessToken, refreshToken } = await generateAccessRefreshToken(student._id);
-
-    const loggedinStudent = await Student
-        .findById(student._id)
-        .select("-password -refreshToken -passwordResetToken");
-    
-    const options = {
-        httpOnly: true,
-        secure: true
-    };
-
-    res.
-    status(200)
-    .cookie("accessToken", accessToken, options)
-    .cookie("refreshToken", refreshToken, options)
-    .json(
-        new ApiResponse(
-            200,
-            {
-                student: loggedinStudent , accessToken, refreshToken,
-            },
-            "Student logged in successfully"
-        )
-    );
-});
-
-const logoutStudent = asyncHandler(async (req, res) => {
-    await Student.findByIdAndUpdate(req.student._id, { refreshToken: undefined });
-    res
-    .status(200)
-    .clearCookie("accessToken")
-    .clearCookie("refreshToken")
-    .json(new ApiResponse(200, {}, "Student logged out successfully"));
-});
 
 const getStudentProfile = asyncHandler(async (req, res) => {
     const student = await Student.findById(req.student._id).select("-password -refreshToken -passwordResetToken");
@@ -136,15 +55,37 @@ const completeStudentProfile = asyncHandler(async (req, res) => {
         throw new ApiError(400, "All fields are required");
     }
 
-    student.name = name;
-    student.rollNo = rollNo;
+    const numberInRange = (value, min, max, label) => {
+        const n = Number(value);
+        if (!Number.isFinite(n) || n < min || n > max) {
+            throw new ApiError(400, `${label} must be between ${min} and ${max}`);
+        }
+        return n;
+    };
+    const text = (value, label, max = 100) => {
+        if (typeof value !== 'string' && typeof value !== 'number') throw new ApiError(400, `${label} is invalid`);
+        const s = String(value).trim();
+        if (!s || s.length > max) throw new ApiError(400, `${label} is invalid`);
+        return s;
+    };
+
+    student.name = text(name, 'Name');
+    student.rollNo = text(rollNo, 'Roll number', 30);
+    student.phone = text(phone, 'Phone', 20);
+    student.cgpi = numberInRange(cgpi, 0, 10, 'CGPI');
+    student.tenthMarks = numberInRange(tenthMarks, 0, 100, '10th marks');
+    student.twelfthMarks = numberInRange(twelfthMarks, 0, 100, '12th marks');
+    student.graduatingYear = numberInRange(graduatingYear, 2000, 2100, 'Graduating year');
+    if (!['btech', 'mtech', 'mba'].includes(degree)) {
+        throw new ApiError(400, 'Degree must be B.Tech, M.Tech or MBA');
+    }
+    if (req.body.gender !== undefined && req.body.gender !== '' && !['male', 'female', 'other'].includes(req.body.gender)) {
+        throw new ApiError(400, 'Invalid gender');
+    }
+    if (req.body.gender) student.gender = req.body.gender;
+
     student.degree = degree;
-    student.cgpi = cgpi;
-    student.tenthMarks = tenthMarks;
-    student.twelfthMarks = twelfthMarks;
-    student.graduatingYear = graduatingYear;
-    student.branch = branch;
-    student.phone = phone;
+    student.branch = text(branch, 'Branch', 20).toLowerCase();
 
     student.isProfileComplete = true;
     await student.save({ validateBeforeSave: false });
@@ -153,349 +94,291 @@ const completeStudentProfile = asyncHandler(async (req, res) => {
     res.status(response.statusCode).json(response);
 });
 
-const updateStudentPassword = asyncHandler(async (req, res) => {
+const APPLICATION_JOB_FIELDS = 'role type ctc location lastDate eligibleBatch eligibleBranches minimumCgpa';
+
+// Flattens an application into the shape the student pages use
+const toStudentApplication = (application) => {
+    const job = application.job || {};
+    const company = application.company || {};
+    return {
+        _id: job._id,
+        applicationId: application._id,
+        role: job.role,
+        type: job.type,
+        ctc: job.ctc,
+        location: job.location,
+        lastDate: job.lastDate,
+        companyName: company.name,
+        companyDetails: { name: company.name, email: company.email, website: company.website },
+        status: application.status,
+        interview: application.interview,
+        appliedAt: application.createdAt,
+        updatedAt: application.updatedAt,
+    };
+};
+
+const findStudentApplications = async (studentId, statuses) => {
+    const filter = { student: studentId };
+    if (statuses) filter.status = { $in: statuses };
+
+    const applications = await Application.find(filter)
+        .populate('job', APPLICATION_JOB_FIELDS)
+        .populate('company', 'name email website')
+        .sort({ updatedAt: -1 });
+
+    // Jobs may have been removed by the admin
+    return applications.filter((a) => a.job && a.company).map(toStudentApplication);
+};
+
+const getAppliedJobsByStudent = asyncHandler(async (req, res) => {
+    res.status(200).json(await findStudentApplications(req.student._id));
+});
+
+const getShortlistedJobsByStudent = asyncHandler(async (req, res) => {
+    res.status(200).json(await findStudentApplications(req.student._id, [
+        'shortlisted', 'interview_scheduled', 'interview_accepted', 'selected', 'offer_accepted', 'offer_declined',
+    ]));
+});
+
+const getMyApplications = asyncHandler(async (req, res) => {
+    const applications = await findStudentApplications(req.student._id);
+    res.status(200).json(new ApiResponse(200, applications, "Applications fetched successfully"));
+});
+
+const applyJob = asyncHandler(async (req, res) => {
+    const { id: jobId } = req.params;
+
     const student = await Student.findById(req.student._id);
     if (!student) {
         throw new ApiError(404, "Student not found");
     }
 
-    const { oldPassword, newPassword } = req.body;
-
-    if (!oldPassword || !newPassword) {
-        throw new ApiError(400, "All fields are required");
+    const job = await Job.findById(jobId);
+    if (!job) {
+        throw new ApiError(404, "Job not found");
     }
 
-    const isValidPassword = await student.isValidPassword(oldPassword);
-    if (!isValidPassword) {
-        throw new ApiError(401, "Invalid old password");
+    const existing = await Application.findOne({ job: job._id, student: student._id });
+    if (existing) {
+        throw new ApiError(400, "You have already applied for this job");
     }
 
-    student.password = newPassword;
-    await student.save();
-
-    const response = new ApiResponse(200, {}, "Password updated successfully");
-    res.status(response.statusCode).json(response);
-});
-
-const forgotPassword = asyncHandler(async (req, res) => {
-    const { email } = req.body;
-
-    if (!email) {
-        throw new ApiError(400, "Email is required");
+    const { eligible, reasons } = checkEligibility(student, job);
+    if (!eligible) {
+        throw new ApiError(400, `You are not eligible for this job: ${reasons.join('; ')}`);
     }
 
-    const student = await Student.findOne({
-        email
+    if (!student.resume?.fileName) {
+        throw new ApiError(400, "Upload your resume in Edit Profile before applying");
+    }
+
+    const application = new Application({
+        job: job._id,
+        student: student._id,
+        company: job.company,
+        resume: { fileName: student.resume.fileName, originalName: student.resume.originalName },
     });
+    application.setStatus('applied', 'student');
+    await application.save();
 
-    if (!student) {
-        throw new ApiError(404, "Student not found");
-    }
+    // Keep the legacy arrays in sync for existing dashboards
+    await Promise.all([
+        Job.updateOne({ _id: job._id }, { $addToSet: { appliedStudents: student._id } }),
+        Student.updateOne({ _id: student._id }, { $addToSet: { appliedJobs: job._id } }),
+    ]);
 
-    const resetToken = student.generatePasswordResetToken();
-    await student.save({ validateBeforeSave: false });
-
-    const resetUrl = `${req.protocol}://${req.get("host")}/api/v1/students/resetpassword/${resetToken}`;
-
-    // Send email with resetUrl
-    const response = new ApiResponse(200, { resetUrl }, "Password reset link sent to email");
-    res.status(response.statusCode).json(response);
-});
-
-const resetPassword = asyncHandler(async (req, res) => {
-    const { resetToken } = req.params;
-    const { newPassword } = req.body;
-
-    if (!resetToken || !newPassword) {
-        throw new ApiError(400, "All fields are required");
-    }
-
-    const hashedToken = Student.hashPasswordResetToken(resetToken);
-
-    const student = await Student.findOne({
-        passwordResetToken: hashedToken,
-        passwordResetExpires: { $gt: Date.now() }
-    });
-
-    if (!student) {
-        throw new ApiError(400, "Invalid or expired reset token");
-    }
-
-    student.password = newPassword;
-    student.passwordResetToken = undefined;
-    student.passwordResetExpires = undefined;
-    await student.save();
-
-    const response = new ApiResponse(200, {}, "Password reset successful");
-    res.status(response.statusCode).json(response);
-});
-
-const getAppliedJobsByStudent = asyncHandler(async (req, res) => {
-    try {
-        const studentId = req.student._id;
-        const student = await Student.findById(studentId);
-        if (!student) {
-            return res.status(404).json({ message: 'Student not found' });
-        }
-
-        const appliedJobs = await Job.aggregate([
-            { $match: { appliedStudents: studentId } },
-            {
-                $lookup: {
-                    from: 'companies',
-                    localField: 'company',
-                    foreignField: '_id',
-                    as: 'companyDetails'
-                }
-            },
-            { $unwind: '$companyDetails' },
-            {
-                $project: {
-                    _id: 1,
-                    type: 1,
-                    role: 1,
-                    description: 1,
-                    createdDate: 1,
-                    lastDate: 1,
-                    ctc: 1,
-                    location: 1,
-                    minimumCgpa: 1,
-                    eligibleBranches: 1,
-                    eligibleBatch: 1,
-                    companyDetails: {
-                        name: 1,
-                        email: 1,
-                        phone: 1
-                    }
-                }
-            }
-        ]);
-
-        res.status(200).json(appliedJobs);
-    } catch (err) {
-        res.status(500).json({ message: err.message });
-    }
-});
-
-const applyJob = asyncHandler(async (req, res) => {
-    const { id: jobId } = req.params;
-    const studentId = req.student._id;
-
-    try {
-        // Fetch student and job documents
-        const student = await Student.findById(studentId);
-        if (!student) {
-            throw new ApiError(404, "Student not found");
-        }
-
-        const job = await Job.findById(jobId);
-        if (!job) {
-            throw new ApiError(404, "Job not found");
-        }
-
-        // Check if the student has already applied
-        if (student.appliedJobs.includes(jobId)) {
-            throw new ApiError(400, "You have already applied for this job");
-        }
-
-        // Update both documents
-        job.appliedStudents.push(student._id);
-        student.appliedJobs.push(jobId);
-
-        // Save the changes
-        await job.save();
-        await student.save();
-
-        const response = new ApiResponse(200, {}, "Job applied successfully");
-        res.status(response.statusCode).json(response);
-
-    } catch (error) {
-        // Re-throw specific API errors or a generic server error
-        if (error instanceof ApiError) {
-            throw error;
-        }
-        throw new ApiError(500, error.message || "Job application failed due to a server error.");
-    }
+    res.status(200).json(new ApiResponse(200, { applicationId: application._id }, "Job applied successfully"));
 });
 
 const withdrawApplication = asyncHandler(async (req, res) => {
     const { id: jobId } = req.params;
     const studentId = req.student._id;
 
-    try {
-        // Fetch both documents
-        const student = await Student.findById(studentId);
-        if (!student) {
-            throw new ApiError(404, "Student not found");
-        }
-        
-        // Check if the student has actually applied for this job
-        if (!student.appliedJobs.includes(jobId)) {
-            throw new ApiError(400, "You have not applied for this job");
-        }
-
-        const job = await Job.findById(jobId);
-
-        // Update the student's applied jobs list
-        student.appliedJobs = student.appliedJobs.filter(
-            (appliedJobId) => appliedJobId.toString() !== jobId
-        );
-        await student.save();
-
-        // Update the job's list of applicants if the job exists
-        if (job) {
-            job.appliedStudents = job.appliedStudents.filter(
-                (id) => id.toString() !== student._id.toString()
-            );
-            await job.save();
-        }
-
-        const response = new ApiResponse(200, {}, "Application withdrawn successfully");
-        res.status(response.statusCode).json(response);
-    } catch (error) {
-        if (error instanceof ApiError) {
-            throw error;
-        }
-        throw new ApiError(500, error.message || "Application withdrawal failed due to a server error.");
+    const application = await Application.findOne({ job: jobId, student: studentId });
+    if (!application) {
+        throw new ApiError(400, "You have not applied for this job");
     }
+    if (application.status !== 'applied') {
+        throw new ApiError(400, "You can only withdraw an application before the recruiter acts on it");
+    }
+
+    await Promise.all([
+        application.deleteOne(),
+        Job.updateOne({ _id: jobId }, { $pull: { appliedStudents: studentId } }),
+        Student.updateOne({ _id: studentId }, { $pull: { appliedJobs: jobId } }),
+    ]);
+
+    res.status(200).json(new ApiResponse(200, {}, "Application withdrawn successfully"));
 });
 
-const getShortlistedJobsByStudent = asyncHandler(async (req, res) => {
-    try {
-        const studentId = req.student._id;
-        const student = await Student.findById(studentId);
-        if (!student) {
-            return res.status(404).json({ message: 'Student not found' });
-        }
-
-        const shortlistedJobs = await Job.aggregate([
-            { $match: { shortlistedStudents: studentId } },
-            {
-                $lookup: {
-                    from: 'companies',
-                    localField: 'company',
-                    foreignField: '_id',
-                    as: 'companyDetails'
-                }
-            },
-            { $unwind: '$companyDetails' },
-            {
-                $project: {
-                    _id: 1,
-                    type: 1,
-                    role: 1,
-                    description: 1,
-                    createdDate: 1,
-                    lastDate: 1,
-                    ctc: 1,
-                    location: 1,
-                    minimumCgpa: 1,
-                    eligibleBranches: 1,
-                    eligibleBatch: 1,
-                    companyDetails: {
-                        name: 1,
-                        email: 1,
-                        phone: 1
-                    }
-                }
-            }
-        ]);
-
-        res.status(200).json(shortlistedJobs);
-    } catch (err) {
-        res.status(500).json({ message: err.message });
+const getOwnApplication = async (applicationId, studentId) => {
+    const application = await Application.findById(applicationId)
+        .populate('job', APPLICATION_JOB_FIELDS)
+        .populate('company', 'name email website');
+    if (!application || String(application.student) !== String(studentId)) {
+        throw new ApiError(404, "Application not found");
     }
+    return application;
+};
+
+const formatDateTime = (date) => new Date(date).toLocaleString('en-IN', {
+    dateStyle: 'full',
+    timeStyle: 'short',
+    timeZone: process.env.TIMEZONE || 'Asia/Kolkata',
+});
+
+// PATCH /student/applications/:id/interview/accept
+const acceptInterview = asyncHandler(async (req, res) => {
+    const application = await getOwnApplication(req.params.id, req.student._id);
+
+    if (application.status !== 'interview_scheduled') {
+        throw new ApiError(400, "There is no pending interview to accept for this application");
+    }
+
+    application.interview.acceptedAt = new Date();
+    application.setStatus('interview_accepted', 'student');
+    await application.save();
+
+    if (application.company?.email) {
+        await sendMail({
+            to: application.company.email,
+            subject: `Interview accepted: ${req.student.name} for ${application.job.role}`,
+            text: `${req.student.name} (${req.student.email}) has accepted the interview for ${application.job.role} scheduled on ${formatDateTime(application.interview.scheduledAt)}.`,
+        });
+    }
+
+    res.status(200).json(new ApiResponse(200, toStudentApplication(application), "Interview accepted"));
+});
+
+// PATCH /student/applications/:id/offer  { decision: 'accept' | 'decline' }
+const respondToOffer = asyncHandler(async (req, res) => {
+    const { decision } = req.body;
+    if (!['accept', 'decline'].includes(decision)) {
+        throw new ApiError(400, "Decision must be 'accept' or 'decline'");
+    }
+
+    const application = await getOwnApplication(req.params.id, req.student._id);
+    if (application.status !== 'selected') {
+        throw new ApiError(400, "There is no pending offer for this application");
+    }
+
+    const student = await Student.findById(req.student._id);
+    if (decision === 'accept' && student.isPlaced) {
+        throw new ApiError(400, "You have already accepted another offer");
+    }
+
+    application.setStatus(decision === 'accept' ? 'offer_accepted' : 'offer_declined', 'student');
+    await application.save();
+
+    if (decision === 'accept') {
+        student.isPlaced = true;
+        student.placedCompany = application.company._id;
+        student.placedJob = application.job._id;
+        await student.save({ validateBeforeSave: false });
+    }
+
+    if (application.company?.email) {
+        await sendMail({
+            to: application.company.email,
+            subject: `Offer ${decision === 'accept' ? 'accepted' : 'declined'}: ${student.name} for ${application.job.role}`,
+            text: `${student.name} (${student.email}) has ${decision === 'accept' ? 'accepted' : 'declined'} your offer for ${application.job.role}.`,
+        });
+    }
+
+    res.status(200).json(new ApiResponse(200, toStudentApplication(application), decision === 'accept' ? "Offer accepted - congratulations!" : "Offer declined"));
+});
+
+// POST /student/resume  (multipart/form-data, field "resume")
+const uploadResume = asyncHandler(async (req, res) => {
+    if (!req.file) {
+        throw new ApiError(400, "Please choose a PDF file to upload");
+    }
+
+    const student = await Student.findById(req.student._id);
+    const previous = student.resume?.fileName;
+
+    student.resume = {
+        fileName: req.file.filename,
+        originalName: req.file.originalname,
+        uploadedAt: new Date(),
+    };
+    await student.save({ validateBeforeSave: false });
+
+    // Delete the old file unless an application still references it
+    if (previous && !(await Application.exists({ 'resume.fileName': previous }))) {
+        fs.promises.unlink(path.join(RESUME_DIR, previous)).catch(() => {});
+    }
+
+    res.status(200).json(new ApiResponse(200, student.resume, "Resume uploaded successfully"));
+});
+
+// GET /student/notices
+const getStudentNotices = asyncHandler(async (req, res) => {
+    const notices = await Notice.find({ audience: { $in: ['students', 'all'] } }).sort({ createdAt: -1 });
+    res.status(200).json(new ApiResponse(200, notices, "Notices fetched successfully"));
 });
 
 const refreshStudentToken = asyncHandler(async (req, res) => {
-    const  refreshToken  = req.cookies?.refreshToken;
+    const refreshToken = req.cookies?.refreshToken;
     if (!refreshToken) {
         throw new ApiError(401, "Refresh token not provided");
     }
 
+    let decoded;
     try {
-        const decoded = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
-        const student = await Student.findOne({ _id: decoded._id, refreshToken });
-        if (!student) {
-            throw new ApiError(401, "Invalid refresh token");
-        }
-
-        if (student.refreshToken !== refreshToken) {
-            throw new ApiError(401, "Refresh token revoked");
-        }
-
-        const { accessToken, refreshToken: newRefreshToken } = await generateAccessRefreshToken(student._id);
-
-        const loggedinStudent = await Student
-            .findById(student._id)
-            .select("-password -refreshToken");
-
-        const options = {
-            httpOnly: true,
-            secure: true
-        };
-
-        res
-        .status(200)
-        .cookie("accessToken", accessToken, options)
-        .cookie("refreshToken", newRefreshToken, options)
-        .json(
-            new ApiResponse(
-                200,
-                {
-                    student: loggedinStudent,
-                    accessToken,
-                    refreshToken: newRefreshToken
-                },
-                "Access token refreshed successfully"
-            )
-        );
+        decoded = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
     } catch (error) {
         throw new ApiError(401, "Invalid refresh token");
     }
+
+    const student = await Student.findOne({ _id: decoded._id, refreshToken });
+    if (!student) {
+        throw new ApiError(401, "Invalid refresh token");
+    }
+    assertAccountActive(student, 'student');
+
+    const tokens = await generateAccessRefreshToken(student._id);
+    setAuthCookies(res, tokens)
+        .status(200)
+        .json(new ApiResponse(200, {}, "Access token refreshed successfully"));
 });
 
+// All open jobs, each flagged with whether this student may apply and why not
 const getActiveJobs = asyncHandler(async (req, res) => {
     const student = req.student;
 
-    if (!student || !student.isProfileComplete) {
-        throw new ApiError(400, "Please complete your profile to view eligible jobs.");
-    }
+    const [jobs, applications] = await Promise.all([
+        Job.find({ lastDate: { $gte: new Date() } }).populate('company', 'name website').sort({ lastDate: 1 }),
+        Application.find({ student: student._id }).select('job status'),
+    ]);
 
-    // Base query for active jobs matching batch and branch
-    let eligibleJobsQuery = Job.find({
-        lastDate: { $gte: new Date() },
-        eligibleBatch: student.graduatingYear,
-        eligibleBranches: { $in: [student.branch] },
-    }).populate('company', 'name');
+    const statusByJob = Object.fromEntries(applications.map((a) => [String(a.job), a.status]));
 
-    let jobs = await eligibleJobsQuery;
-
-    // **FIX:** Filter by CGPA in the application code to handle string vs number comparison
-    const filteredJobs = jobs.filter(job => {
-        const minimumCgpa = parseFloat(job.minimumCgpa);
-        if (isNaN(minimumCgpa)) return false; // Skip jobs with invalid CGPA data
-        return student.cgpi >= minimumCgpa;
-    });
+    const data = jobs
+        .filter((job) => job.company)
+        .map((job) => ({
+            ...job.toObject(),
+            eligibility: checkEligibility(student, job),
+            applicationStatus: statusByJob[String(job._id)] || null,
+        }));
 
     res.status(200).json(
-         new ApiResponse(200, filteredJobs, "Eligible jobs fetched successfully")
+         new ApiResponse(200, data, "Jobs fetched successfully")
     );
 });
 
 export {
-    registerStudent,
-    loginStudent,
-    logoutStudent,
     getStudentProfile,
     completeStudentProfile,
-    updateStudentPassword,
-    forgotPassword,
-    resetPassword,
     applyJob,
     withdrawApplication,
     getAppliedJobsByStudent,
     getShortlistedJobsByStudent,
     refreshStudentToken,
-    getActiveJobs
+    getActiveJobs,
+    getMyApplications,
+    acceptInterview,
+    respondToOffer,
+    uploadResume,
+    getStudentNotices
 };

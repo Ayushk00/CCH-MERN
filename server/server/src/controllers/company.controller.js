@@ -4,6 +4,10 @@ import {ApiError} from '../utils/ApiError.js';
 import {ApiResponse} from '../utils/ApiResponse.js';
 import Job from '../models/job.model.js';
 import Company from '../models/company.model.js'
+import jwt from 'jsonwebtoken';
+import Application from '../models/application.model.js';
+import { assertAccountActive } from '../utils/accountStatus.js';
+import { setAuthCookies } from '../utils/cookies.js';
 
 const generateAccessRefreshTokens = async (companyId) => {
     try {
@@ -24,93 +28,21 @@ const generateAccessRefreshTokens = async (companyId) => {
     }
 };
 
-const registerCompany = asyncHandler(async (req, res) => {
-    const { name, email, password } = req.body;
-
-    if (!name || !email || !password) {
-        throw new ApiError(400, 'All fields are required');
-    }
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-        throw new ApiError(400, 'Invalid email format');
-    }
-
-    const existingCompany = await Company.findOne({ email });
-    if (existingCompany) {
-        throw new ApiError(400, 'Company already registered with this email');
-    }
-
-    await Company.create({ name, email, password });
-    
-    const createdCompany = await Company.findOne({ email }).select('-password -refreshToken');
-    if (!createdCompany) {
-        throw new ApiError(500, 'Company registration failed');
-    }
-
-
-    res.status(201).json(new ApiResponse(201, 'Company registered successfully', createdCompany));
-});
-
-const loginCompany = asyncHandler(async (req, res) => {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-        throw new ApiError(400, 'All fields are required');
-    }
-
-    const company = await Company.findOne({ email });
-    if (!company) {
-        throw new ApiError(401, 'Invalid email or password');
-    }
-
-    const isPasswordValid = await company.isValidPassword(password);
-    if (!isPasswordValid) {
-        throw new ApiError(401, 'Invalid email or password');
-    }
-
-    const { accessToken, refreshToken } = await generateAccessRefreshTokens(company._id);
-    
-    const loggedInCompany = await Company.findById(company._id).select('-password -refreshToken');
-
-    const options = {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production'
-    };
-
-    res.
-    status(200).
-    cookie('refreshToken', refreshToken, options).
-    cookie('accessToken', accessToken, options).
-    json(new ApiResponse(
-        200,
-        'Company logged in successfully', 
-        { 
-            accessToken, refreshToken, company: loggedInCompany 
-        })
-    ); 
-});
-
-const logoutCompany = asyncHandler(async (req, res) => {
-    await Company.findByIdAndUpdate(req.company._id, { refreshToken: undefined });
-    res.
-    status(200).
-    clearCookie('refreshToken').
-    clearCookie('accessToken').
-    json(new ApiResponse(200, 'Company logged out successfully'));
-});
-
 const getCompanyProfile = asyncHandler(async (req, res) => {
     const company = await Company.findById(req.company._id).select('-password -refreshToken');
     if (!company) {
         throw new ApiError(404, 'Company not found');
     }
 
-    res.status(200).json(new ApiResponse(200, 'Company profile retrieved successfully', company));
+    res.status(200).json(new ApiResponse(200, company, 'Company profile retrieved successfully'));
 });
 
 const updateCompanyProfile = asyncHandler(async (req, res) => {
-    const { name, address, website, phone } = req.body;
+    const clean = (value) => (typeof value === 'string' ? value.trim().slice(0, 300) : undefined);
+    const name = clean(req.body.name);
+    const address = clean(req.body.address);
+    const website = clean(req.body.website);
+    const phone = clean(req.body.phone);
 
     if (!name && !website && !address && !phone) {
         throw new ApiError(400, 'At least one field is required');
@@ -132,19 +64,8 @@ const updateCompanyProfile = asyncHandler(async (req, res) => {
 
     await company
     .save({ validateBeforeSave: false });
-    res.status(200).json(new ApiResponse(200, 'Company profile updated successfully', company));
-});
-
-const updateCompanyLogo = asyncHandler(async (req, res) => {
-    const company = await Company.findById(req.company._id);
-    if (!company) {
-        throw new ApiError(404, 'Company not found');
-    }
-
-    company.logo = req.file.path;
-    await company.save({ validateBeforeSave: false });
-
-    res.status(200).json(new ApiResponse(200, 'Company logo updated successfully', company));
+    const updatedCompany = await Company.findById(company._id).select('-password -refreshToken -passwordResetToken');
+    res.status(200).json(new ApiResponse(200, updatedCompany, 'Company profile updated successfully'));
 });
 
 const getCompanyJobs = asyncHandler(async (req, res) => {
@@ -178,6 +99,16 @@ const createJob = asyncHandler(async (req, res) => {
         }
     }
     
+    if ([type, role, location, eligibleBranches, lastDate].some((v) => typeof v !== 'string')) {
+        throw new ApiError(400, 'Invalid job details');
+    }
+    if (!(Number(ctc) >= 0) || !(Number(eligibleBatch) > 1999)) {
+        throw new ApiError(400, 'CTC and eligible batch must be valid numbers');
+    }
+    if (isNaN(new Date(lastDate).getTime())) {
+        throw new ApiError(400, 'Invalid application deadline');
+    }
+
     // Convert comma-separated string of branches to an array
     const eligibleBranchesArray = eligibleBranches.split(',').map(branch => branch.trim().toLowerCase());
 
@@ -223,7 +154,7 @@ const getAppliedCandidates = asyncHandler(async (req, res) => {
 
     // **FIX:** Use .populate() to get the full student documents directly.
     // This is more efficient than a separate Student.find() query.
-    const job = await Job.findById(jobId).populate('appliedStudents');
+    const job = await Job.findById(jobId).populate('appliedStudents', '-password -refreshToken -passwordResetToken -passwordResetExpires');
 
     if (!job) {
         throw new ApiError(404, 'Job not found');
@@ -256,12 +187,13 @@ const shorlistCandidates = asyncHandler(async (req, res) => {
         throw new ApiError(403, 'You are not authorized to shortlist candidates for this job');
     }
 
-    const students = await Student.find({ jobs: job._id });
+    const students = await Student.find({ appliedJobs: job._id });
     if (!students) {
         throw new ApiError(404, 'No candidates found');
     }
     try {
-        const shortlistedStudents = students.filter(student => req.body.students.includes(student._id));
+        const requestedIds = (req.body.students || []).map(String);
+        const shortlistedStudents = students.filter(student => requestedIds.includes(student._id.toString()));
         job.shortlistedStudents = shortlistedStudents.map(student => student._id);
         await job.save({ validateBeforeSave: false });
 
@@ -287,7 +219,7 @@ const getShortlistedCandidates = asyncHandler(async (req, res) => {
         throw new ApiError(403, 'You are not authorized to view shortlisted candidates for this job');
     }
 
-    const students = await Student.find({ shortlistedJobs: job._id });
+    const students = await Student.find({ shortlistedJobs: job._id }).select('-password -refreshToken -passwordResetToken -passwordResetExpires');
     if (!students) {
         throw new ApiError(404, 'No shortlisted candidates found');
     }
@@ -311,6 +243,8 @@ const deleteJob = asyncHandler(async (req, res) => {
 
     // **FIX:** Use the modern findByIdAndDelete method instead of the deprecated .remove()
     await Job.findByIdAndDelete(jobId);
+    await Application.deleteMany({ job: jobId });
+    await Company.updateOne({ _id: req.company._id }, { $pull: { jobs: jobId } });
 
     // Also, pull this job's ID from any students who applied or were shortlisted
     await Student.updateMany(
@@ -348,68 +282,6 @@ const updateJob = asyncHandler(async (req, res) => {
     res.status(200).json(new ApiResponse(200, 'Job updated successfully', job));
 });
 
-const changePassword = asyncHandler(async (req, res) => {
-    const { currentPassword, newPassword } = req.body;
-
-    if (!currentPassword || !newPassword) {
-        throw new ApiError(400, 'All fields are required');
-    }
-
-    const company = await Company.findById(req.company._id);
-    if (!company) {
-        throw new ApiError(404, 'Company not found');
-    }
-
-    const isPasswordValid = await company.isValidPassword(currentPassword);
-    if (!isPasswordValid) {
-        throw new ApiError(401, 'Invalid current password');
-    }
-
-    company.password = newPassword;
-    await company.save();
-
-    res.status(200).json(new ApiResponse(200, 'Password updated successfully'));
-});
-
-const forgotPassword = asyncHandler(async (req, res) => {
-    const { email } = req.body;
-
-    if (!email) {
-        throw new ApiError(400, 'Email is required');
-    }
-
-    const company = await Company.findOne({ email });
-    if (!company) {
-        throw new ApiError(404, 'Company not found');
-    }
-
-    company.generatePasswordResetToken();
-    await company.save({ validateBeforeSave: false });
-
-    // send email with reset token
-    res.status(200).json(new ApiResponse(200, 'Password reset token sent to email'));
-});
-
-const resetPassword = asyncHandler(async (req, res) => {
-    const { password } = req.body;
-    const resetToken = req.params.resetToken;
-
-    if (!password) {
-        throw new ApiError(400, 'Password is required');
-    }
-
-    const company = await Company.findOne({ passwordResetToken: resetToken });
-    if (!company) {
-        throw new ApiError(404, 'Company not found');
-    }
-
-    company.password = password;
-    company.passwordResetToken = undefined;
-    await company.save();
-
-    res.status(200).json(new ApiResponse(200, 'Password reset successfully'));
-});
-
 const refreshCompanyToken = asyncHandler(async (req, res) => {
     const incomingRefreshToken = req.cookies?.refreshToken;
     if (!incomingRefreshToken) {
@@ -423,32 +295,24 @@ const refreshCompanyToken = asyncHandler(async (req, res) => {
         if (!company || company.refreshToken !== incomingRefreshToken) {
             throw new ApiError(401, "Invalid or expired refresh token");
         }
+        assertAccountActive(company, 'company');
         
         const { accessToken, refreshToken } = await generateAccessRefreshTokens(company._id);
 
-        const options = {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-        };
-
-        return res.status(200)
-            .cookie("accessToken", accessToken, options)
-            .cookie("refreshToken", refreshToken, options)
-            .json(new ApiResponse(200, { accessToken, refreshToken }, "Token refreshed successfully"));
+        return setAuthCookies(res, { accessToken, refreshToken })
+            .status(200)
+            .json(new ApiResponse(200, {}, "Token refreshed successfully"));
 
     } catch (error) {
+        if (error instanceof ApiError && error.statusCode === 403) throw error;
         throw new ApiError(401, "Invalid refresh token");
     }
 });
 
 export {
     generateAccessRefreshTokens,
-    registerCompany,
-    loginCompany,
-    logoutCompany,
     getCompanyProfile,
     updateCompanyProfile,
-    updateCompanyLogo,
     getCompanyJobs,
     createJob,
     getAppliedCandidates,
@@ -456,8 +320,5 @@ export {
     getShortlistedCandidates,
     deleteJob,
     updateJob,
-    changePassword,
-    forgotPassword,
-    resetPassword,
     refreshCompanyToken
 };

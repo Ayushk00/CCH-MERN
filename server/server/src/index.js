@@ -6,10 +6,12 @@ dotenv.config({
 
 import { connectdb } from "./db/connection.db.js";
 import { app } from "./app.js";
+import { ensureAdmin } from "./utils/ensureAdmin.js";
 
 
 // The rest of your code remains the same
 connectdb()
+  .then(ensureAdmin)
   .then(() => {
     const PORT = process.env.PORT || 5000;
     app.listen(PORT, () => {
